@@ -21,6 +21,7 @@ Edit `~/.orf-secrets` (e.g. `nano ~/.orf-secrets`) to contain:
 ```sh
 export DEEPINFRA_API_KEY="di-..."
 export NOUS_API_KEY="sk-..."
+export TYPESAFE_API_KEY="<your TypeSafe key>" # for Jev controllers
 ```
 
 Then add this line to the end of `~/.bashrc` so every terminal session picks them up:
@@ -40,6 +41,8 @@ dotnet run --project orf -- run --spec orf/specs/first-ffa.yaml
 
 Dashboard: http://localhost:5199 (or the port in the spec). Everything about the run —
 states, orders, prompts, responses, replay — lands in `runs/<runId>/` (gitignored).
+
+For the native Jev controller and Jev-versus-Jev experiment, see [JEV.md](JEV.md).
 
 ## Remote access while traveling
 

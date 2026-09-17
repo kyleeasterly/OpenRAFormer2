@@ -490,7 +490,7 @@ namespace OpenRA.Mods.LLM.Traits
 							yourUnit = NameOf(world, e.VictimType),
 							attackerId = e.AttackerId,
 							attacker = NameOf(world, e.AttackerType),
-							attackerOwner = attackerCfg?.Slug,
+							attackerOwner = e.AttackerId == 0 ? null : attackerCfg?.Slug,
 							attackerCell = e.AttackerCell == CPos.Zero ? null : CellArray(e.AttackerCell)
 						};
 					})
@@ -515,6 +515,7 @@ namespace OpenRA.Mods.LLM.Traits
 					.OrderBy(s => s.cell[0]).ThenBy(s => s.cell[1])
 					.ToList(),
 				production,
+				ruleCatalog = cfg.AutoManage ? null : RuleCatalog.Build(world, player, queues),
 				pendingPlacement,
 				buildings,
 				units,

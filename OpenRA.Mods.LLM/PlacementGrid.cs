@@ -55,10 +55,13 @@ namespace OpenRA.Mods.LLM
 		static char Classify(World world, Player player, ActorInfo ai, BuildingInfo bi,
 			IResourceLayer resources, CPos cell, List<CPos> valid)
 		{
-			if (!world.Map.Contains(cell))
+			// Placement legality checks dynamic blockers across the footprint. Only
+			// expose visible footprints so the grid cannot reveal units through fog.
+			if (!world.Map.Contains(cell) || bi.Tiles(cell).Any(t => !player.Shroud.IsVisible(t)))
 				return '.';
 
-			var actors = world.ActorMap.GetActorsAt(cell).Where(a => !a.IsDead && a.IsInWorld).ToList();
+			var actors = world.ActorMap.GetActorsAt(cell)
+				.Where(a => !a.IsDead && a.IsInWorld && a.CanBeViewedByPlayer(player)).ToList();
 			var building = actors.FirstOrDefault(a => a.Info.HasTraitInfo<BuildingInfo>());
 			if (building != null)
 				return building.Owner == player ? 'B'

@@ -111,7 +111,9 @@ public sealed class MatchRunner(Spec spec, string specPath)
 				if (p.IsHuman)
 					continue;
 
-				if (p.IsSwarm)
+				if (p.Controller == "jev")
+					agentTasks.Add(new JevLoop(runDir, spec, p).RunAsync(agentCts.Token));
+				else if (p.IsSwarm)
 				{
 					// Swarm player: the coordinator owns the whole lifecycle — bootstrap
 					// commander, handoff to specialists, dynamic scaling, shared strategist.
@@ -198,6 +200,7 @@ public sealed class MatchRunner(Spec spec, string specPath)
 	void CreateRunDir(string runDir, string runId, int? allocatedDisplay, int? allocatedPort)
 	{
 		Directory.CreateDirectory(Path.Combine(runDir, "state"));
+		Util.WriteAtomic(Path.Combine(runDir, "spec.yaml"), File.ReadAllText(specPath));
 		foreach (var p in spec.Players.Where(p => !p.IsHuman))
 		{
 			Directory.CreateDirectory(Path.Combine(runDir, "orders", p.Slug, "inbox"));
@@ -212,16 +215,18 @@ public sealed class MatchRunner(Spec spec, string specPath)
 				["slug"] = p.Slug,
 				["display"] = p.Display,
 				["bot"] = p.IsHuman ? "human" : "llm",
+				["controller"] = p.Controller,
 				["faction"] = p.Faction,
 				["spawn"] = p.Spawn,
 				["team"] = p.Team,
+				["autoManage"] = p.Controller != "jev",
 			});
 
 		var match = new JsonObject
 		{
 			["runId"] = runId,
 			["map"] = spec.Map,
-			["stateIntervalTicks"] = 25,
+			["stateIntervalTicks"] = spec.StateIntervalTicks,
 			["options"] = new JsonObject { ["gamespeed"] = "default" },
 			["display"] = allocatedDisplay,
 			["webPort"] = allocatedPort,

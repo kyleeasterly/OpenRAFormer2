@@ -69,6 +69,7 @@ namespace OpenRA.Mods.LLM.Traits
 		Player player;
 		bool enabled;
 		bool initialized;
+		bool autoManage = true;
 		string inboxDir;
 		string resultsDir;
 
@@ -105,6 +106,7 @@ namespace OpenRA.Mods.LLM.Traits
 					var configs = LlmRun.PlayerConfigs(world);
 					if (configs.TryGetValue(player, out var cfg))
 					{
+						autoManage = cfg.AutoManage;
 						inboxDir = LlmRun.InboxDir(cfg.Slug);
 						resultsDir = LlmRun.ResultsDir(cfg.Slug);
 						Directory.CreateDirectory(inboxDir);
@@ -126,7 +128,7 @@ namespace OpenRA.Mods.LLM.Traits
 			if (world.WorldTick % info.OrderScanInterval == 0)
 				ScanInbox(world);
 
-			if (world.WorldTick % info.AutoBehaviourInterval == 0)
+			if (autoManage && world.WorldTick % info.AutoBehaviourInterval == 0)
 			{
 				AutoDeployMcv(world);
 				AutoPlaceReadyBuildings(world);

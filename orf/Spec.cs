@@ -13,6 +13,7 @@ public sealed class Spec
 	public StreamSpec Stream { get; set; } = new();
 	public int TurnIntervalSeconds { get; set; } = 12;
 	public int MaxTurnsPerPlayer { get; set; }
+	public int StateIntervalTicks { get; set; } = 25;
 	public string StateFormat { get; set; } = "json";
 	public List<PlayerSpec> Players { get; set; } = [];
 	public Dictionary<string, ProviderSpec> Providers { get; set; } = [];
@@ -54,6 +55,8 @@ public sealed class Spec
 			throw new InvalidOperationException($"Unknown stateFormat '{spec.StateFormat}' (expected 'json' or 'markdown')");
 		if (spec.Players.Count == 0)
 			throw new InvalidOperationException("Spec has no players");
+		if (spec.StateIntervalTicks is < 1 or > 250)
+			throw new InvalidOperationException("stateIntervalTicks must be between 1 and 250");
 
 		var dupes = spec.Players.CountBy(p => p.Slug).Where(kv => kv.Value > 1).Select(kv => kv.Key).ToList();
 		if (dupes.Count > 0)
@@ -64,6 +67,16 @@ public sealed class Spec
 
 		foreach (var p in spec.Players)
 		{
+			if (p.Controller is not ("llm" or "jev"))
+				throw new InvalidOperationException($"Unknown controller '{p.Controller}' for '{p.Slug}'");
+			if (p.Controller == "jev")
+			{
+				if (p.IsHuman || p.Advisor != null || p.Swarm != null || p.FallbackModels.Count > 0)
+					throw new InvalidOperationException("Jev controllers cannot use human slots, advisors, swarms, or LLM fallback models");
+				if (spec.ProviderFor(p).IsTest)
+					throw new InvalidOperationException("Jev requires a TypeSafe provider URL");
+				p.Jev.Validate();
+			}
 			if (p.IsHuman)
 			{
 				if (p.Advisor != null)
@@ -128,6 +141,8 @@ public sealed class PlayerSpec
 	public string Slug { get; set; } = "";
 	public string Display { get; set; } = "";
 	public string Provider { get; set; } = "test";
+	public string Controller { get; set; } = "llm";
+	public JevSpec Jev { get; set; } = new();
 
 	/// <summary>provider: human — the slot is left open in the lobby for a real
 	/// player to join over the LAN. No agent loop, no orders, no state export.</summary>
@@ -174,6 +189,29 @@ public sealed class PlayerSpec
 	public SwarmSpec? Swarm { get; set; }
 
 	public bool IsSwarm => Swarm != null && (Swarm.Roles.Count > 0 || Swarm.Bootstrap != null);
+}
+
+public sealed class JevSpec
+{
+	public int IntervalMilliseconds { get; set; } = 1000;
+	public int RequestTimeoutMilliseconds { get; set; } = 5000;
+	public int MaxResponseAgeTicks { get; set; } = 75;
+	public int ObjectiveSeconds { get; set; } = 20;
+	public int CommandHoldSeconds { get; set; } = 5;
+	public int SquadSize { get; set; } = 12;
+	public int MaxSquads { get; set; } = 8;
+	public int MaxPlacementOptions { get; set; } = 128;
+	public double InputUsdPerMillionTokens { get; set; } = 0.042;
+
+	public void Validate()
+	{
+		if (IntervalMilliseconds < 100 || RequestTimeoutMilliseconds is < 100 or > 30000
+			|| MaxResponseAgeTicks is < 1 or > 250 || ObjectiveSeconds is < 1 or > 120
+			|| CommandHoldSeconds is < 1 or > 60 || SquadSize is < 1 or > 32
+			|| MaxSquads is < 1 or > 16 || MaxPlacementOptions is < 2 or > 254
+			|| !double.IsFinite(InputUsdPerMillionTokens) || InputUsdPerMillionTokens < 0)
+			throw new InvalidOperationException("Invalid Jev cadence, deadline, grouping, candidate limit, or pricing configuration");
+	}
 }
 
 /// <summary>Swarm composition: bootstrap commander, core roles, and dynamic spawn rules.</summary>

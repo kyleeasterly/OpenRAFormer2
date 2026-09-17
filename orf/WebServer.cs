@@ -252,7 +252,9 @@ public static class WebServer
 			var request = ReadOrNull(Path.Combine(turnDir, "request.json")) ?? "null";
 			var response = ReadOrNull(Path.Combine(turnDir, "response.json")) ?? "null";
 			var orders = ReadOrNull(Path.Combine(turnDir, "orders.json")) ?? "null";
-			return Results.Content($"{{\"request\":{request},\"response\":{response},\"orders\":{orders}}}", "application/json");
+			var decisions = ReadOrNull(Path.Combine(turnDir, "decisions.json")) ?? "null";
+			var results = ReadOrNull(Path.Combine(turnDir, "results.json")) ?? "null";
+			return Results.Content($"{{\"request\":{request},\"response\":{response},\"orders\":{orders},\"decisions\":{decisions},\"results\":{results}}}", "application/json");
 		});
 
 		var historyPath = Path.Combine(runDir, "history.jsonl");
@@ -366,6 +368,7 @@ public static class WebServer
 				["slug"] = p.Slug,
 				["display"] = p.Display,
 				["provider"] = p.Provider,
+				["controller"] = p.Controller,
 				["model"] = p.Model,
 				["faction"] = p.Faction,
 				["status"] = Util.TryReadJson(Path.Combine(runDir, "agents", p.Slug, "status.json")),

@@ -1,0 +1,28 @@
+# First pure Jev experiment: identical controllers, opposite spawns, GDI mirror.
+name: jev-duel
+map: scorched-earth.oramap
+web: { port: 5199 }
+display: ":97"
+resolution: [2540, 2540]
+stream: { fps: 6, scale: 2048, quality: 6 }
+stateIntervalTicks: 25
+turnIntervalSeconds: 0
+players:
+  - slug: jev-alpha
+    display: Jev Alpha
+    controller: jev
+    provider: typesafe
+    model: jev-latest
+    faction: gdi
+    spawn: 1
+    jev: { intervalMilliseconds: 1000, requestTimeoutMilliseconds: 5000 }
+  - slug: jev-beta
+    display: Jev Beta
+    controller: jev
+    provider: typesafe
+    model: jev-latest
+    faction: gdi
+    spawn: 8
+    jev: { intervalMilliseconds: 1000, requestTimeoutMilliseconds: 5000 }
+providers:
+  typesafe: { baseUrl: "https://api.typesafe.ai/v1", apiKeyEnv: TYPESAFE_API_KEY }

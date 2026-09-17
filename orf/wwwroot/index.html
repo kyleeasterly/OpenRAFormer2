@@ -208,7 +208,7 @@
     <span id="clock" class="mono">--:--</span>
     <span class="hdim">tick <span id="tick" class="mono">–</span></span>
     <span class="hdim"><span id="alive">–</span> alive</span>
-    <span class="hdim mono" title="total LLM spend (provider-reported)">$<span id="totalCost">0.0000</span></span>
+    <span class="hdim mono" title="Total model spend; Jev costs estimated from input-token usage">$<span id="totalCost">0.0000</span></span>
     <span class="hdim mono" title="this match's LLM throughput, rolling 60s window (drivers + advisor modules)"><span id="tokRate">–</span> tok/s · <span id="tokMin">–</span> tok/min · <span id="reqMin">–</span> req/min</span>
     <span id="liveBadge"><span class="dot"></span><span id="liveText">LIVE</span></span>
     <a id="hubLink" href="../../" style="display:none" title="all matches">⌂ matches</a>
@@ -439,6 +439,26 @@ async function toggleTurn(item, open) {
   item.dataset.loaded = "1";
   body.textContent = "";
 
+  if (d.request?.questions) {
+    el("h4", null, body).textContent = "Jev decisions";
+    for (const [id, question] of Object.entries(d.request.questions)) {
+      const answer = d.response?.answers?.[id];
+      const outcome = d.decisions?.decisions?.find(x => x.question === id);
+      el("h4", null, body).textContent = `${id}: ${answer?.choice ?? answer?.score ?? answer?.noul ?? "pending"}`;
+      el("div", null, body).textContent = typeof question.instructions === "string" ? question.instructions : JSON.stringify(question.instructions);
+      if (answer?.probabilities) {
+        el("pre", null, body).textContent = Object.entries(answer.probabilities)
+          .sort((a, b) => b[1] - a[1]).slice(0, 5)
+          .map(([key, p]) => `${(p * 100).toFixed(1)}% ${key}: ${JSON.stringify(question.criteria?.[key] ?? "")}`).join("\n");
+      }
+      if (outcome) el("div", null, body).textContent = "Execution: " + outcome.outcome;
+    }
+    if (d.decisions?.discarded) el("p", null, body).textContent = d.decisions.discarded;
+    const raw = el("details", null, body);
+    el("summary", null, raw).textContent = "Full observation, questions, and engine feedback";
+    el("pre", null, raw).textContent = JSON.stringify({ request: d.request, results: d.results }, null, 1);
+  }
+
   // Input: the newest user message from the request payload.
   const messages = (d.request && d.request.messages) || [];
   const lastUser = [...messages].reverse().find(m => m.role === "user");
@@ -481,7 +501,7 @@ async function toggleTurn(item, open) {
   if (usage) {
     const cost = typeof usage.estimated_cost === "number" ? ` · $${usage.estimated_cost.toFixed(5)}` : "";
     el("div", "costline mono", body).textContent =
-      `tokens ${usage.prompt_tokens ?? "?"} in / ${usage.completion_tokens ?? "?"} out${cost}`;
+      `tokens ${usage.prompt_tokens ?? usage.input_tokens ?? "?"} in / ${usage.completion_tokens ?? usage.output_tokens ?? "?"} out${cost}`;
   }
 }
 
@@ -655,7 +675,7 @@ function makeCard(p, parent) {
 
   const grid = el("div", "statgrid", card);
   const stats = {};
-  for (const [key, label] of [["cash","Cash"],["power","Power"],["army","Army"],["units","Units"],["kd","Kills / losses"],["buildings","Buildings"],["targets","Targets"],["cost","LLM cost"]]) {
+  for (const [key, label] of [["cash","Cash"],["power","Power"],["army","Army"],["units","Units"],["kd","Kills / losses"],["buildings","Buildings"],["targets","Targets"],["cost",p.controller === "jev" ? "Cost (est.)" : "Model cost"]]) {
     const tile = el("div", "tile", grid);
     el("span", "k", tile).textContent = label;
     stats[key] = el("span", "v mono", tile);

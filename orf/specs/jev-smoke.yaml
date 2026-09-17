@@ -1,0 +1,13 @@
+name: jev-smoke
+map: scorched-earth.oramap
+web: { port: 5199 }
+resolution: [1600, 1600]
+stream: { fps: 3, scale: 1280, quality: 6 }
+stateIntervalTicks: 25
+turnIntervalSeconds: 0
+players:
+  - { slug: jev, display: Jev, controller: jev, provider: typesafe, model: jev-latest, faction: gdi, spawn: 1 }
+  - { slug: scripted, display: Scripted baseline, provider: test, faction: gdi, spawn: 8 }
+providers:
+  typesafe: { baseUrl: "https://api.typesafe.ai/v1", apiKeyEnv: TYPESAFE_API_KEY }
+  test: { baseUrl: "", apiKeyEnv: "" }

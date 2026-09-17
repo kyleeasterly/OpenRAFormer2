@@ -234,9 +234,10 @@ static async Task<int> AgentTurnCommand(string[] args)
 
 	var specDir = Path.GetDirectoryName(Path.GetFullPath(specPath)) ?? ".";
 	var index = spec.Players.IndexOf(player);
-	var loop = new AgentLoop(outDir, spec, player, index, specDir);
-
-	await loop.TakeTurnAsync(state, [], CancellationToken.None);
+	if (player.Controller == "jev")
+		await new JevLoop(outDir, spec, player).TakeTurnAsync(state, CancellationToken.None);
+	else
+		await new AgentLoop(outDir, spec, player, index, specDir).TakeTurnAsync(state, [], CancellationToken.None);
 
 	Util.Log("orf", $"agent-turn complete; artifacts under {outDir}");
 	return 0;

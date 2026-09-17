@@ -72,6 +72,7 @@ namespace OpenRA.Mods.LLM.Traits
 		static void ReportInner(Actor victim, Actor attacker)
 		{
 			var world = victim.World;
+			var visible = attacker.CanBeViewedByPlayer(victim.Owner);
 			lock (Lock)
 			{
 				if (Entries.Count >= MaxEntries)
@@ -82,10 +83,10 @@ namespace OpenRA.Mods.LLM.Traits
 					victim.Owner,
 					victim.ActorID,
 					victim.Info.Name,
-					attacker.ActorID,
-					attacker.Info.Name,
-					attacker.Owner,
-					attacker.IsInWorld && !attacker.IsDead ? world.Map.CellContaining(attacker.CenterPosition) : CPos.Zero));
+					visible ? attacker.ActorID : 0,
+					visible ? attacker.Info.Name : "unknown",
+					visible ? attacker.Owner : victim.Owner,
+					visible && attacker.IsInWorld && !attacker.IsDead ? world.Map.CellContaining(attacker.CenterPosition) : CPos.Zero));
 			}
 		}
 

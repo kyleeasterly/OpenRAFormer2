@@ -42,6 +42,7 @@ namespace OpenRA.Mods.LLM
 		public string Faction { get; set; } = "Random";
 		public int Spawn { get; set; }
 		public int Team { get; set; }
+		public bool AutoManage { get; set; } = true;
 
 		/// <summary>Human slot: left open in the lobby for a real player to join over
 		/// the network. No LlmBot, no state export, no order channel.</summary>
