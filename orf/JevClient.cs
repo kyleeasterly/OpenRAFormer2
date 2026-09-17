@@ -48,6 +48,51 @@ public sealed class JevClient
 			?? throw new InvalidDataException("TypeSafe returned a non-object response");
 	}
 
+	public static List<JsonObject> Batches(JsonObject request, int characterBudget)
+	{
+		var batches = new List<JsonObject>();
+		JsonObject NewBatch() => new() { ["model"] = request["model"]!.DeepClone(), ["state"] = request["state"]!.DeepClone(), ["questions"] = new JsonObject() };
+		var batch = NewBatch();
+		foreach (var (id, question) in (JsonObject)request["questions"]!)
+		{
+			((JsonObject)batch["questions"]!)[id] = question!.DeepClone();
+			if (batch.ToJsonString().Length <= characterBudget) continue;
+			((JsonObject)batch["questions"]!).Remove(id);
+			if (((JsonObject)batch["questions"]!).Count > 0) batches.Add(batch);
+			batch = NewBatch();
+			((JsonObject)batch["questions"]!)[id] = question.DeepClone();
+			if (batch.ToJsonString().Length > characterBudget)
+				throw new InvalidOperationException("A single Jev question and its observation exceed the native batch budget");
+		}
+		if (((JsonObject)batch["questions"]!).Count > 0) batches.Add(batch);
+		return batches;
+	}
+
+	public async Task<JsonObject> EvaluateBatchedAsync(JsonObject request, int characterBudget,
+		Action<int, JsonObject, JsonObject> completed, CancellationToken ct)
+	{
+		var batches = Batches(request, characterBudget);
+		var answers = new JsonObject();
+		var models = new JsonArray();
+		long input = 0, output = 0;
+		JsonObject? last = null;
+		for (var i = 0; i < batches.Count; i++)
+		{
+			last = await EvaluateAsync(batches[i], ct);
+			completed(i, batches[i], last);
+			ValidateAnswers((JsonObject)batches[i]["questions"]!, last);
+			foreach (var (id, answer) in (JsonObject)last["answers"]!) answers[id] = answer!.DeepClone();
+			models.Add(last["model"]?.DeepClone());
+			input += JevPolicy.Number(last["usage"], "input_tokens");
+			output += JevPolicy.Number(last["usage"], "output_tokens");
+		}
+		if (batches.Count == 1) return last!;
+		return new JsonObject { ["model"] = last?["model"]?.DeepClone(), ["answers"] = answers,
+			["usage"] = new JsonObject { ["input_tokens"] = input, ["output_tokens"] = output },
+			["batchCount"] = batches.Count, ["batchModels"] = models,
+			["aggregation"] = "Native answers from sequential batches sharing the exact same observation; raw exchanges are in batches/." };
+	}
+
 	/// <summary>Schema guarantees do not replace checking the transport contract.</summary>
 	public static void ValidateAnswers(JsonObject questions, JsonObject response)
 	{

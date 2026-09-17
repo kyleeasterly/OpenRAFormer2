@@ -117,7 +117,7 @@ public sealed class JevLoop
 		var request = payload.ToJsonString();
 		// Conservative character guard. Exact billed tokens remain in usage; do
 		// not silently truncate questions or emit unmapped choices on oversized input.
-		if (request.Length > 110000)
+		if (policyV2 == null && request.Length > 110000)
 			throw new InvalidOperationException("Jev request exceeds the experiment's 110k-character guard; reduce squads or placement options");
 		Util.WriteAtomic(Path.Combine(turnDir, "state.json"), state.ToJsonString());
 		Util.WriteAtomic(Path.Combine(turnDir, "request.json"), request);
@@ -129,7 +129,13 @@ public sealed class JevLoop
 		JsonObject response;
 		try
 		{
-			response = await client.EvaluateAsync(payload, ct);
+			response = policyV2 == null ? await client.EvaluateAsync(payload, ct)
+				: await client.EvaluateBatchedAsync(payload, policyV2.RequestCharacterBudget, (index, batch, answer) =>
+				{
+					var path = Path.Combine(turnDir, "batches", (index + 1).ToString("D3"));
+					Util.WriteAtomic(Path.Combine(path, "request.json"), batch.ToJsonString());
+					Util.WriteAtomic(Path.Combine(path, "response.json"), answer.ToJsonString());
+				}, ct);
 		}
 		finally
 		{

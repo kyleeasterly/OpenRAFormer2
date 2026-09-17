@@ -19,6 +19,8 @@ public sealed class JevTactics
 	public int[]? OperationCell { get; set; }
 	public string Operation { get; set; } = "Discover enemy production and economy";
 	public long OperationAt { get; set; } = -1000;
+	public string Campaign { get; set; } = "prepare";
+	public long CampaignAt { get; set; } = -1000;
 }
 
 /// <summary>
@@ -32,6 +34,8 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 	readonly Dictionary<string, (string Name, (int X, int Y) Cell)> operations = [];
 	readonly Dictionary<string, Dictionary<string, JevAction>> targets = [];
 	int requestCharacterBudget = 48000;
+	public int RequestCharacterBudget => requestCharacterBudget;
+	readonly List<string> campaignGroups = [];
 	static readonly JsonSerializerOptions Options = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
 	public JevFrame Prepare(JsonObject state, JsonArray results, JsonArray pending)
@@ -60,6 +64,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 		RefineryQuestions(frame);
 		BuildOperation(frame);
 		BuildCombat(frame);
+		BuildCampaign(frame);
 		BuildMaintenance(frame);
 		// Site descriptions are already attached to the placement question. Keep
 		// the rest of the economy observation without duplicating 128 alternatives.
@@ -84,7 +89,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 
 	void FitRequest(JevFrame frame)
 	{
-		while (RequestState.ToJsonString().Length + frame.Questions.ToJsonString().Length > requestCharacterBudget)
+		while (RequestState.ToJsonString().Length + frame.Questions.Select(q => q.Value!.ToJsonString().Length).DefaultIfEmpty().Max() > requestCharacterBudget - 256)
 		{
 			var largest = frame.Questions.Where(q => q.Key.StartsWith("placement") || q.Key.EndsWith("_target"))
 				.Select(q => (q.Key, Criteria: q.Value?["criteria"] as JsonObject))
@@ -126,7 +131,8 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 		if (frame.Questions["goal"] is JsonObject goal)
 			goal["instructions"] = "Choose the next capital investment that most improves the ability to win. " +
 				"Use economy and game: income must sustain fighting, and refineries may grant a free harvester as refineryRules specifies. " +
-				"A single harvester's income is a bottleneck for several military queues. Consider additional harvesting on useful patches. " +
+				"Additional harvesting is useful only when income is actually limiting production and accessible Tiberium supports another harvester. " +
+				"If cash is accumulating or income already covers spending, invest in fighting strength and pressure instead of more refineries. " +
 				"Positive powerSurplus means current power demand is satisfied; extra power is useful only for planned demand or redundancy. " +
 				"Technology and static defenses compete with income and an army. Do not repeatedly buy infrastructure with no current benefit. " +
 				"Choose one additional building, unlock an unavailable unit, or none. Account for investments already in progress.";
@@ -137,6 +143,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 				" Use economy and localCombat to identify the actual bottleneck. For military production, build a force that can fight together " +
 				"and counter observed opposition. Engineers cannot fight; recruit one only for a credible capture task, not as general combat infantry. " +
 				"For infrastructure, income and required power enable sustained production; excess power or unused tech does not. " +
+				"Do not add refineries when existing income covers spending or cash is accumulating. Expand only onto useful accessible Tiberium. " +
 				"Avoid replacing lost scouts repeatedly when a fighting force is needed.";
 		}
 	}
@@ -303,9 +310,46 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 				"A spread-out group does not deliver its listed combat value at once. New recruits can join another group rather than trickle into enemy fire. " +
 				"An isolated light unit can scout, but do not repeatedly sacrifice lone reinforcements. " +
 				"A cohesive force with support should exploit an advantage and finish the enemy, without waiting for an arbitrary army size. " +
-				"Artillery needs cover and standoff; capture units are unarmed. Local danger takes precedence over a distant objective.", choices);
+				"After a campaign launch or scout order, continue the committed advance unless local danger or a real cohesion problem requires a change; " +
+				"do not cancel the offensive simply to wait for future reinforcements. Artillery needs cover and standoff; capture units are unarmed.", choices);
 		}
 		RequestState["localCombat"] = combat;
+	}
+
+	void BuildCampaign(JevFrame frame)
+	{
+		campaignGroups.Clear();
+		if (Number(frame.State, "second") - Tactics.CampaignAt < config.ObjectiveSeconds) return;
+		campaignGroups.AddRange(Tactics.Groups.Where(g => g.Value.Role is "front" or "artillery" or "air"
+			&& g.Value.Phase is not ("advance" or "engage" or "scout")).Select(g => g.Key));
+		if (campaignGroups.Count == 0) return;
+		var members = campaignGroups.SelectMany(g => Tactics.Groups[g].Members).ToList();
+		var home = Cell(frame.State["map"]?["yourSpawnCell"]);
+		var objective = Tactics.OperationCell is { Length: 2 } c ? (c[0], c[1]) : Objects(frame.State, "enemySpawns").Select(e => Cell(e["cell"])).FirstOrDefault(home);
+		frame.Questions["campaign"] = Choice("Should the preparing combat groups now launch a coordinated offensive? " +
+			"Use all friendly forces, current economy, localCombat and observed opposition. Gathering indefinitely cannot win. " +
+			"An unknown enemy force is a reason to obtain contact, not to wait forever. " +
+			"An early scout can find the enemy, but repeatedly launching lone reinforcements into resistance wastes units. " +
+			"Commit a useful combined force when its strength justifies pressure; hold when an actual threat or missing capability warrants delay. " +
+			"This is an executable army-wide decision. Launch takes precedence over these groups' local movement answers for this observation.",
+			new JsonObject { ["hold"] = "Keep the groups' local decisions; delay the coordinated offensive.",
+				["launch"] = new JsonObject { ["directive"] = "Send all listed preparing groups toward the common objective together, engaging opposition en route.",
+					["groups"] = new JsonArray([.. campaignGroups.Select(g => (JsonNode)JsonValue.Create(g)!)]), ["cell"] = CellNode(objective) } });
+		frame.Actions["campaign"] = new() { ["launch"] = new(new JsonObject { ["type"] = "attack_move", ["actorIds"] = Ids(members), ["cell"] = CellNode(objective) }, "campaign") };
+		var units = Objects(frame.State, "units").ToDictionary(u => Number(u, "id"));
+		var scouts = campaignGroups.Where(g => Tactics.Groups[g].Role == "front"
+			&& (Tactics.Groups.Count < config.MaxSquads || Tactics.Groups[g].Members.Count == 1))
+			.SelectMany(g => Tactics.Groups[g].Members).OrderBy(id => Number(Catalog(frame.State, Name(units[id])), "cost")).Take(3);
+		foreach (var id in scouts)
+		{
+			var key = "scout" + id;
+			frame.Questions["campaign"]!["criteria"]![key] = new JsonObject
+			{
+				["directive"] = "Send this one unit to discover the enemy's base and strength while the rest prepare. Avoid repeated sacrificial scouting once the enemy is located.",
+				["unit"] = units[id].DeepClone(), ["cell"] = CellNode(objective)
+			};
+			frame.Actions["campaign"][key] = new(new JsonObject { ["type"] = "attack_move", ["actorIds"] = Ids([id]), ["cell"] = CellNode(objective) }, "campaign");
+		}
 	}
 
 	void BuildMaintenance(JevFrame frame)
@@ -346,8 +390,29 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 				frame.Actions[group]["engage"] = target;
 		var trace = core.Apply(frame, response, latest, channel);
 		foreach (var d in Objects(trace, "decisions"))
+		{
 			if (Text(d, "outcome") == "submitted" && Tactics.Groups.TryGetValue(Text(d, "question"), out var group))
 				group.Phase = Text(d, "choice");
+			if (Text(d, "question") == "campaign" && Text(d, "outcome") == "submitted")
+			{
+				var choice = Text(d, "choice");
+				Tactics.Campaign = choice == "launch" ? "launch" : "scout";
+				if (choice == "launch")
+					foreach (var id in campaignGroups) Tactics.Groups[id].Phase = "advance";
+				else
+				{
+					var scout = d["order"]!["actorIds"]![0]!.GetValue<long>();
+					var source = Tactics.Groups.Values.Single(g => g.Members.Contains(scout));
+					if (source.Members.Count == 1) source.Phase = "scout";
+					else
+					{
+						source.Members.Remove(scout);
+						Tactics.Groups["group" + Tactics.NextGroup++] = new JevGroup { Role = source.Role, Phase = "scout", Members = [scout], CreatedAt = Number(latest, "second") };
+					}
+				}
+			}
+		}
+		if (answers["campaign"] != null) Tactics.CampaignAt = Number(latest, "second");
 		if (answers["operation"] != null)
 		{
 			Tactics.OperationAt = Number(latest, "second");

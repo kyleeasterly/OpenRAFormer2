@@ -288,6 +288,34 @@ public sealed class JevTests
 	}
 
 	[Test]
+	public async Task NativeBatchesShareOneObservationAndCombineOnlyValidatedAnswers()
+	{
+		var request = JsonNode.Parse("""{"model":"jev-test","state":{"cash":100},"questions":{"a":{"type":"noul","instructions":"A?"},"b":{"type":"noul","instructions":"B?"}}}""")!.AsObject();
+		var single = request.DeepClone().AsObject(); single["questions"]!.AsObject().Remove("b");
+		var budget = single.ToJsonString().Length;
+		var records = 0;
+		using var http = new HttpClient(new Handler(async (message, ct) =>
+		{
+			var sent = JsonNode.Parse(await message.Content!.ReadAsStringAsync(ct))!.AsObject();
+			Assert.That(sent["state"]!.ToJsonString(), Is.EqualTo(request["state"]!.ToJsonString()));
+			Assert.That(sent.ToJsonString().Length, Is.LessThanOrEqualTo(budget));
+			var id = sent["questions"]!.AsObject().Single().Key;
+			return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(new JsonObject
+			{
+				["model"] = "jev-test", ["answers"] = new JsonObject { [id] = new JsonObject { ["type"] = "noul", ["noul"] = 0.8 } },
+				["usage"] = new JsonObject { ["input_tokens"] = 7, ["output_tokens"] = 3 }
+			}.ToJsonString()) };
+		}));
+		var client = new JevClient("https://example.invalid/v1", "test-only", 500, http);
+		var result = await client.EvaluateBatchedAsync(request, budget, (_, _, _) => records++, CancellationToken.None);
+		Assert.That(records, Is.EqualTo(2));
+		Assert.That(result["answers"]!.AsObject().Count, Is.EqualTo(2));
+		Assert.That(result["usage"]!["input_tokens"]!.GetValue<long>(), Is.EqualTo(14));
+		Assert.That(result["batchCount"]!.GetValue<int>(), Is.EqualTo(2));
+		Assert.Throws<InvalidOperationException>(() => JevClient.Batches(request, 5));
+	}
+
+	[Test]
 	public async Task NativeSizeErrorIsIdentifiedWithoutEchoingArbitraryErrorContent()
 	{
 		using var http = new HttpClient(new Handler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)

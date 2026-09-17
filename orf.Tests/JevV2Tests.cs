@@ -109,6 +109,36 @@ public sealed class JevV2Tests
 	}
 
 	[Test]
+	public void CampaignLaunchOwnsPreparingGroupsBeforeTheirLocalOrders()
+	{
+		var (policy, tactics) = Policy();
+		var state = Observation();
+		var frame = policy.Prepare(state, [], []);
+		var response = Response(frame, new() { ["campaign"] = "launch", ["group0"] = "engage", ["group0_target"] = "target90" });
+		var trace = policy.Apply(frame, response, state, new PlayerOrderChannel(Path.GetTempPath(), "jev-v2-test"));
+		Assert.That(((JsonArray)trace["orders"]!).Count, Is.EqualTo(1));
+		Assert.That(trace["orders"]![0]!["type"]!.GetValue<string>(), Is.EqualTo("attack_move"));
+		Assert.That(tactics.Groups["group0"].Phase, Is.EqualTo("advance"));
+		Assert.That(tactics.Campaign, Is.EqualTo("launch"));
+		Assert.That(policy.Prepare(state, [], []).Questions.ContainsKey("campaign"), Is.False);
+	}
+
+	[Test]
+	public void CampaignScoutIsDetachedFromThePreparingForce()
+	{
+		var (policy, tactics) = Policy();
+		var state = Observation();
+		var recruit = state["units"]![0]!.DeepClone(); recruit["id"] = 3L;
+		state["units"]!.AsArray().Add(recruit);
+		var frame = policy.Prepare(state, [], []);
+		policy.Apply(frame, Response(frame, new() { ["campaign"] = "scout2" }), state, new PlayerOrderChannel(Path.GetTempPath(), "jev-v2-test"));
+		Assert.That(tactics.Groups["group0"].Members, Is.EqualTo(new long[] { 3 }));
+		Assert.That(tactics.Groups["group1"].Members, Is.EqualTo(new long[] { 2 }));
+		Assert.That(tactics.Groups["group1"].Phase, Is.EqualTo("scout"));
+		Assert.That(tactics.Campaign, Is.EqualTo("scout"));
+	}
+
+	[Test]
 	public void OversizedPlacementChoicesAreSampledWithMatchingExecutableActions()
 	{
 		var (policy, _) = Policy();
@@ -123,14 +153,15 @@ public sealed class JevV2Tests
 				["patches"] = new JsonArray() });
 		state["spatialEconomy"] = new JsonObject { ["refineries"] = new JsonObject { ["Tiberium Refinery"] = new JsonObject() }, ["placementSites"] = sites };
 		var frame = policy.Prepare(state, [], []);
-		Assert.That(policy.RequestState.ToJsonString().Length + frame.Questions.ToJsonString().Length, Is.LessThanOrEqualTo(48000));
+		JsonObject Request() => new() { ["model"] = "jev-test", ["state"] = policy.RequestState.DeepClone(), ["questions"] = frame.Questions.DeepClone() };
+		Assert.That(JevClient.Batches(Request(), 48000).All(b => b.ToJsonString().Length <= 48000), Is.True);
 		var choices = ((JsonObject)frame.Questions["placement0"]!["criteria"]!).Select(c => c.Key).ToList();
 		Assert.That(choices.Count, Is.LessThan(129));
 		Assert.That(choices, Does.Contain("wait"));
 		Assert.That(frame.Actions["placement0"].Keys, Is.EquivalentTo(choices.Where(k => k != "wait")));
 		Assert.That(policy.ReduceRequestBudget(), Is.True);
 		frame = policy.Prepare(state, [], []);
-		Assert.That(policy.RequestState.ToJsonString().Length + frame.Questions.ToJsonString().Length, Is.LessThanOrEqualTo(36000));
+		Assert.That(JevClient.Batches(Request(), 36000).All(b => b.ToJsonString().Length <= 36000), Is.True);
 	}
 
 	[Test]
