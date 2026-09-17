@@ -13,6 +13,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using OpenRA.Graphics;
 using OpenRA.Mods.Common.Traits;
 using OpenRA.Traits;
@@ -456,7 +457,7 @@ namespace OpenRA.Mods.LLM.Traits
 				}
 			}
 
-			return new
+			var state = new
 			{
 				tick = world.WorldTick,
 				second = world.WorldTick * world.Timestep / 1000,
@@ -523,6 +524,18 @@ namespace OpenRA.Mods.LLM.Traits
 				lastKnownEnemyBuildings = frozen,
 				exploredResources = ExploredResources(world, player)
 			};
+			if (cfg.JevPolicyVersion < 2)
+				return state;
+
+			var extended = JsonSerializer.SerializeToNode(state);
+			extended["spatialEconomy"] = JsonSerializer.SerializeToNode(JevSpatialState.Build(world, player, queues));
+			foreach (var building in extended["buildings"].AsArray())
+			{
+				var actor = world.GetActorById(building["id"].GetValue<uint>());
+				building["repairing"] = actor?.TraitOrDefault<RepairableBuilding>()?.Repairers.Contains(player) ?? false;
+			}
+
+			return extended;
 		}
 
 		List<object> ExploredResources(World world, Player player)

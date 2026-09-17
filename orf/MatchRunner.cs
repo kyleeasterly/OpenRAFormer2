@@ -220,6 +220,7 @@ public sealed class MatchRunner(Spec spec, string specPath)
 				["spawn"] = p.Spawn,
 				["team"] = p.Team,
 				["autoManage"] = p.Controller != "jev",
+				["jevPolicyVersion"] = p.Controller == "jev" ? p.Jev.PolicyVersion : 1,
 			});
 
 		var match = new JsonObject

@@ -19,7 +19,7 @@ public sealed class JevTests
 		if (Directory.Exists(directory)) Directory.Delete(directory, true);
 	}
 
-	static JsonObject State() => (JsonObject)JsonNode.Parse("""
+	internal static JsonObject State() => (JsonObject)JsonNode.Parse("""
 	{
 	  "tick": 100, "second": 4,
 	  "you": {"cash": 900, "powerProvided": 100, "powerDrained": 40},
@@ -40,7 +40,7 @@ public sealed class JevTests
 	}
 	""")!;
 
-	static JsonObject Response(JevFrame frame, Dictionary<string, string>? choices = null)
+	internal static JsonObject Response(JevFrame frame, Dictionary<string, string>? choices = null)
 	{
 		var answers = new JsonObject();
 		foreach (var (id, q) in frame.Questions)

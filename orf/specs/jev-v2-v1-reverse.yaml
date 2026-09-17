@@ -1,0 +1,28 @@
+# Controlled policy comparison. V1 preserves the policy used in the 35:03 duel.
+name: jev-v2-v1-reverse
+map: scorched-earth.oramap
+web: { port: 5199 }
+display: ":97"
+resolution: [2540, 2540]
+stream: { fps: 6, scale: 2048, quality: 6 }
+stateIntervalTicks: 25
+turnIntervalSeconds: 0
+players:
+  - slug: candidate
+    display: Jev v2
+    controller: jev
+    provider: typesafe
+    model: jev-latest
+    faction: gdi
+    spawn: 8
+    jev: { policyVersion: 2, commandHoldSeconds: 2 }
+  - slug: baseline
+    display: Jev v1
+    controller: jev
+    provider: typesafe
+    model: jev-latest
+    faction: gdi
+    spawn: 1
+    jev: { policyVersion: 1 }
+providers:
+  typesafe: { baseUrl: "https://api.typesafe.ai/v1", apiKeyEnv: TYPESAFE_API_KEY }

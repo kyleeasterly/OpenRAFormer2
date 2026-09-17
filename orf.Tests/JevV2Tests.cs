@@ -1,0 +1,138 @@
+using System.Text.Json.Nodes;
+using NUnit.Framework;
+using Orf;
+using static OrfTests.JevTests;
+
+namespace OrfTests;
+
+[TestFixture]
+public sealed class JevV2Tests
+{
+	static JsonObject Observation()
+	{
+		var state = State();
+		state["units"]![0]!["hpPercent"] = 100;
+		state["ruleCatalog"]!["Minigunner"]!["weapons"]![0]!["targets"] = "Ground,Water";
+		return state;
+	}
+
+	static (JevPolicyV2 Policy, JevTactics Tactics) Policy()
+	{
+		var config = new JevSpec { PolicyVersion = 2 };
+		var tactics = new JevTactics();
+		return (new(config, new JevPolicy(config), tactics), tactics);
+	}
+
+	[Test]
+	public void ReinforcementsDoNotJoinAWaveAlreadyCommittedAcrossTheMap()
+	{
+		var (policy, tactics) = Policy();
+		var state = Observation();
+		policy.Prepare(state, [], []);
+		tactics.Groups["group0"].Phase = "advance";
+		state["units"]![0]!["cell"] = new JsonArray(70,70);
+		((JsonArray)state["units"]!).Add(new JsonObject { ["id"] = 3L, ["name"] = "Minigunner", ["cell"] = new JsonArray(12,10), ["idle"] = true });
+		var frame = policy.Prepare(state, [], []);
+		Assert.That(tactics.Groups["group0"].Members, Is.EqualTo(new long[] { 2 }));
+		Assert.That(tactics.Groups["group1"].Members, Is.EqualTo(new long[] { 3 }));
+		Assert.That(frame.Questions.ContainsKey("group1"), Is.True);
+		Assert.That(frame.Questions.ContainsKey("squad0"), Is.False);
+	}
+
+	[Test]
+	public void AReplacementUnitDoesNotRetainALegacyQuestionForADeadGroup()
+	{
+		var (policy, tactics) = Policy();
+		var state = Observation();
+		policy.Prepare(state, [], []);
+		state["units"]![0]!["id"] = 3L;
+		var frame = policy.Prepare(state, [], []);
+		Assert.That(tactics.Groups.ContainsKey("group0"), Is.False);
+		Assert.That(frame.Questions.ContainsKey("group0"), Is.False);
+		Assert.That(frame.Questions.ContainsKey("group1"), Is.True);
+	}
+
+	[Test]
+	public void ArtilleryAndCaptureSpecialistsAreSeparateFromFrontlineTroops()
+	{
+		var (policy, tactics) = Policy();
+		var state = Observation();
+		state["ruleCatalog"]!["Artillery"] = JsonNode.Parse("""{"cost":900,"weapons":[{"rangeCells":11,"targets":"Ground"}]}""");
+		state["ruleCatalog"]!["Engineer"] = JsonNode.Parse("""{"cost":500,"canCapture":true,"weapons":[]}""");
+		foreach (var (id, name) in new[] { (3L,"Artillery"), (4L,"Engineer") })
+			((JsonArray)state["units"]!).Add(new JsonObject { ["id"] = id, ["name"] = name, ["cell"] = new JsonArray(12,10), ["idle"] = true });
+		policy.Prepare(state, [], []);
+		Assert.That(tactics.Groups.Values.Select(g => g.Role), Is.EquivalentTo(new[] { "front", "artillery", "capture" }));
+	}
+
+	[Test]
+	public void LocalTargetIsUsedOnlyWhenTheGroupChoosesToEngage()
+	{
+		var (policy, _) = Policy();
+		var state = Observation();
+		var frame = policy.Prepare(state, [], []);
+		var response = Response(frame, new() { ["group0_target"] = "target90" });
+		var channel = new PlayerOrderChannel(Path.GetTempPath(), "jev-v2-test");
+		Assert.That(((JsonArray)policy.Apply(frame, response, state, channel)["orders"]!).Count, Is.Zero);
+		frame = policy.Prepare(state, [], []);
+		response = Response(frame, new() { ["group0_target"] = "target90", ["group0"] = "engage" });
+		var trace = policy.Apply(frame, response, state, channel);
+		Assert.That(trace["orders"]![0]!["targetActorId"]!.GetValue<long>(), Is.EqualTo(90));
+	}
+
+	[Test]
+	public void FarAwaySightingsAreNotLocalCombatTargets()
+	{
+		var (policy, _) = Policy();
+		var state = Observation();
+		state["visibleEnemies"]![0]!["cell"] = new JsonArray(90,90);
+		Assert.That(policy.Prepare(state, [], []).Questions.ContainsKey("group0_target"), Is.False);
+	}
+
+	[Test]
+	public void RefineryChoiceIncludesDockingRoutesAndPatchSize()
+	{
+		var (policy, _) = Policy();
+		var state = Observation();
+		state["pendingPlacement"]![0]!["item"] = "Tiberium Refinery";
+		state["spatialEconomy"] = JsonNode.Parse("""
+		{"refineries":{"Tiberium Refinery":{"freeUnit":"Harvester"}},"placementSites":[
+		 {"item":"Tiberium Refinery","cell":[5,5],"dockCell":[5,7],"openDockNeighbors":3,"patches":[{"id":"large","travelCells":2,"visibleCells":30,"density":150}]},
+		 {"item":"Tiberium Refinery","cell":[7,5],"dockCell":[7,7],"openDockNeighbors":1,"patches":[{"id":"small","travelCells":1,"visibleCells":2,"density":3}]}]}
+		""");
+		var frame = policy.Prepare(state, [], []);
+		var criteria = frame.Questions["placement0"]!["criteria"]!;
+		Assert.That(criteria["c5_5"]!["patches"]![0]!["travelCells"]!.GetValue<int>(), Is.EqualTo(2));
+		Assert.That(criteria["c7_5"]!["patches"]![0]!["visibleCells"]!.GetValue<int>(), Is.EqualTo(2));
+		Assert.That(policy.RequestState["game"]!["spatialEconomy"]!["placementSites"], Is.Null);
+	}
+
+	[Test]
+	public void RepairToggleIsNeitherRepeatedNorAppliedAfterRepairStateChanges()
+	{
+		var (policy, _) = Policy();
+		var state = Observation();
+		state["buildings"]![0]!["hpPercent"] = 40;
+		state["buildings"]![0]!["repairing"] = false;
+		var frame = policy.Prepare(state, [], []);
+		var order = frame.Actions["maintenance"]["repair1"].Order;
+		state["buildings"]![0]!["repairing"] = true;
+		var channel = new PlayerOrderChannel(Path.GetTempPath(), "jev-v2-test");
+		Assert.That(channel.Validate(order, state), Does.Contain("repair state changed"));
+		Assert.That(policy.Prepare(state, [], []).Questions.ContainsKey("maintenance"), Is.False);
+	}
+
+	[Test]
+	public void ExpiredAnswerCannotCommitOperationOrGroupManeuver()
+	{
+		var (policy, tactics) = Policy();
+		var state = Observation();
+		var frame = policy.Prepare(state, [], []);
+		var response = Response(frame, new() { ["operation"] = "objective0", ["group0"] = "advance" });
+		state = (JsonObject)state.DeepClone(); state["tick"] = 1000;
+		var trace = policy.Apply(frame, response, state, new PlayerOrderChannel(Path.GetTempPath(), "jev-v2-test"));
+		Assert.That(((JsonArray)trace["orders"]!).Count, Is.Zero);
+		Assert.That(tactics.OperationCell, Is.Null);
+		Assert.That(tactics.Groups["group0"].Phase, Is.EqualTo("assemble"));
+	}
+}

@@ -85,6 +85,12 @@ public sealed class PlayerOrderChannel(string runDir, string slug, int stateInte
 		}
 		if (order["actorId"] != null && !own.Contains(Number(order, "actorId")))
 			return "actor no longer owned or alive";
+		if (type == "repair" && order["expectedRepairing"] != null)
+		{
+			var building = Objects(state, "buildings").FirstOrDefault(b => Number(b, "id") == Number(order, "actorId"));
+			if (Bool(building, "repairing") != Bool(order, "expectedRepairing"))
+				return "repair state changed since observation";
+		}
 		if (order["targetActorId"] != null)
 		{
 			var target = Number(order, "targetActorId");

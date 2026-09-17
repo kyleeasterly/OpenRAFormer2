@@ -68,6 +68,9 @@ players stop playing.
 
 ## Explicit scaffolding and limitations
 
+These describe the original `policyVersion: 1` controller, which remains the
+default so existing experiment specs retain their behavior.
+
 - Combat units are grouped by stable actor ID, with 12 members per squad and eight
   squads by default. Overflow joins the smallest squad so units are not silently
   omitted. Jev can send a single member scouting or give the squad a complete
@@ -93,6 +96,56 @@ players stop playing.
   goals behind production queues that do not yet exist are not directly selectable.
 - The comparison is between complete controllers, not an isolated model benchmark.
   Candidate limits, grouping, reservations, and prompts influence the result.
+
+## V2: spatial economy and combat questions
+
+Set `jev: { policyVersion: 2 }` on a player to select the next harness. The native
+model and order validation are shared with v1; `JevPolicyV2` wraps the unchanged
+`JevPolicy` and replaces its combat questions. No LLM is involved.
+
+- **Refineries:** a dedicated placement question compares the actual docking
+  cell's walking distance to visible Tiberium patches, patch size and density,
+  dock access, nearby existing refineries, and visible enemies. The engine derives
+  the dock and free harvester from the mod rules. Candidate generation keeps the
+  best routes to each patch before filling the remaining spatial coverage budget.
+  Four-neighbor routes use explored terrain and visible building footprints,
+  including the proposed refinery. They ignore moving traffic, terrain speeds,
+  and diagonal shortcuts; they are estimates, not exact travel times. Patches
+  contain currently visible resources only. The existing placement radius still
+  limits expansion.
+- **Economy:** explicit counts, power surplus, and free-harvester rules support
+  investment and production questions. These ask about sustained military income,
+  useful power, and credible capture tasks for engineers. Jev chooses whether and
+  when to expand; there is no prescribed opening or refinery count.
+- **Groups:** nearby recruits join assembling/defending groups of the same role.
+  Deployed groups are sealed to new recruits while capacity permits. Frontline,
+  artillery, air, capture, and support units receive separate role context. The
+  eight-group bound still applies; overflow joins the nearest group, preferring
+  the same role. Thus separation is not an unconditional guarantee at capacity.
+- **Combat:** a persistent common operation gives each group a destination. Each
+  group separately chooses a maneuver (assemble, reinforce, advance, engage,
+  defend, withdraw, continue) and, when available, a local target. A target answer
+  is executed only if the same batch selects engage. Both questions use the same
+  observation; neither assumes the other's answer. Local health, weapon ranges,
+  group spread, and nearby health-adjusted unit costs provide context. Unit cost
+  is a rough force indicator, not a matchup simulation. There is no mandatory
+  army size before attacking.
+- **Maintenance:** Jev can enable paid building repair or sell a power consumer
+  during a shortage. Observed repair state and revalidation prevent repeated
+  orders from toggling an active repair off.
+
+The comparison specs use a two-second command hold for v2 and the original
+five-second hold for v1. Run them sequentially to swap starting positions:
+
+```bash
+dotnet orf/bin/Release/net10.0/orf.dll run --spec orf/specs/jev-v2-v1.yaml
+dotnet orf/bin/Release/net10.0/orf.dll run --spec orf/specs/jev-v2-v1-reverse.yaml
+python3 orf/analyze_jev.py runs/<first-run> runs/<reverse-run>
+```
+
+V2 also persists `agents/<slug>/tactics.json`. V1 receives its original observation
+shape; only v2 gets the added spatial economy and repair-state fields. See the
+[experiment report](experiments/2026-09-17-jev-v2.md) for diagnosis and results.
 
 ## Timing and reliability
 

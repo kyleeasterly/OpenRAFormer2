@@ -193,6 +193,7 @@ public sealed class PlayerSpec
 
 public sealed class JevSpec
 {
+	public int PolicyVersion { get; set; } = 1;
 	public int IntervalMilliseconds { get; set; } = 1000;
 	public int RequestTimeoutMilliseconds { get; set; } = 5000;
 	public int MaxResponseAgeTicks { get; set; } = 75;
@@ -205,7 +206,7 @@ public sealed class JevSpec
 
 	public void Validate()
 	{
-		if (IntervalMilliseconds < 100 || RequestTimeoutMilliseconds is < 100 or > 30000
+		if (PolicyVersion is < 1 or > 2 || IntervalMilliseconds < 100 || RequestTimeoutMilliseconds is < 100 or > 30000
 			|| MaxResponseAgeTicks is < 1 or > 250 || ObjectiveSeconds is < 1 or > 120
 			|| CommandHoldSeconds is < 1 or > 60 || SquadSize is < 1 or > 32
 			|| MaxSquads is < 1 or > 16 || MaxPlacementOptions is < 2 or > 254

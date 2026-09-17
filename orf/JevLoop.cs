@@ -14,6 +14,7 @@ public sealed class JevLoop
 	readonly JevClient client;
 	readonly PlayerOrderChannel channel;
 	readonly JevPolicy policy;
+	readonly JevPolicyV2? policyV2;
 	readonly Queue<double> latencies = [];
 	int sequence;
 	int turns;
@@ -41,6 +42,8 @@ public sealed class JevLoop
 		channel = new(runDir, player.Slug, spec.StateIntervalTicks);
 		var memory = Util.TryReadJson(Path.Combine(AgentDir, "memory.json"))?.Deserialize<JevMemory>();
 		policy = new(player.Jev, memory);
+		if (player.Jev.PolicyVersion == 2)
+			policyV2 = new(player.Jev, policy, Util.TryReadJson(Path.Combine(AgentDir, "tactics.json"))?.Deserialize<JevTactics>());
 		var turnDir = Path.Combine(AgentDir, "turns");
 		if (Directory.Exists(turnDir))
 			sequence = Directory.GetDirectories(turnDir).Select(Path.GetFileName)
@@ -106,10 +109,10 @@ public sealed class JevLoop
 		var results = channel.Collect(state);
 		foreach (var r in results)
 			policy.Memory.Note("Engine: " + r!.ToJsonString());
-		var frame = policy.Prepare(state, results, channel.PendingOrders);
+		var frame = policyV2?.Prepare(state, results, channel.PendingOrders) ?? policy.Prepare(state, results, channel.PendingOrders);
 		if (frame.Questions.Count == 0)
 			return;
-		var payload = new JsonObject { ["model"] = player.Model, ["state"] = policy.RequestState, ["questions"] = frame.Questions };
+		var payload = new JsonObject { ["model"] = player.Model, ["state"] = policyV2?.RequestState ?? policy.RequestState, ["questions"] = frame.Questions };
 		var request = payload.ToJsonString();
 		// Conservative character guard. Exact billed tokens remain in usage; do
 		// not silently truncate questions or emit unmapped choices on oversized input.
@@ -142,12 +145,14 @@ public sealed class JevLoop
 		var latest = Util.TryReadJson(StatePath) as JsonObject ?? state;
 		var trace = File.Exists(Path.Combine(runDir, "result.json"))
 			? new JsonObject { ["orders"] = new JsonArray(), ["decisions"] = new JsonArray(), ["discarded"] = "match ended while evaluating" }
-			: policy.Apply(frame, response, latest, channel);
+			: policyV2?.Apply(frame, response, latest, channel) ?? policy.Apply(frame, response, latest, channel);
 		var orders = (JsonArray)trace["orders"]!;
 		channel.Submit(seq, orders, latest);
 		Util.WriteAtomic(Path.Combine(turnDir, "orders.json"), new JsonObject { ["orders"] = orders.DeepClone() }.ToJsonString());
 		Util.WriteAtomic(Path.Combine(turnDir, "decisions.json"), trace.ToJsonString());
 		Util.WriteAtomic(Path.Combine(AgentDir, "memory.json"), JsonSerializer.Serialize(policy.Memory));
+		if (policyV2 != null)
+			Util.WriteAtomic(Path.Combine(AgentDir, "tactics.json"), JsonSerializer.Serialize(policyV2.Tactics));
 		summary = string.Join("; ", orders.OfType<JsonObject>().Select(o => Text(o, "type") + " " + Text(o, "item")));
 		if (summary.Length == 0)
 			summary = Text(trace, "discarded") is { Length: > 0 } discarded ? discarded : "Continuing assignments / saving";
@@ -162,9 +167,12 @@ public sealed class JevLoop
 		var goals = new JsonArray("Focus: " + policy.Memory.Focus);
 		if (policy.Memory.Goal != null)
 			goals.Add("Objective: " + policy.Memory.Goal);
+		if (policyV2 != null)
+			goals.Add("Operation: " + policyV2.Tactics.Operation);
 		Util.WriteAtomic(Path.Combine(AgentDir, "status.json"), new JsonObject
 		{
 			["controller"] = "jev", ["turn"] = turns, ["seq"] = sequence.ToString("D6"),
+			["policyVersion"] = player.Jev.PolicyVersion,
 			["model"] = player.Model, ["provider"] = player.Provider,
 			["lastTurnAtUtc"] = responseAt?.ToString("o"), ["requestStartedAtUtc"] = requestAt?.ToString("o"),
 			["lastResponseAtUtc"] = responseAt?.ToString("o"), ["lastTurnSeconds"] = lastSeconds,
