@@ -131,11 +131,21 @@ model and order validation are shared with v1; `JevPolicyV2` wraps the unchanged
   is a rough force indicator, not a matchup simulation. There is no mandatory
   army size before attacking.
 - **Campaign commitment:** Jev explicitly chooses whether to launch the preparing
-  combat groups together, detach one scout, or leave decisions to the local
-  groups. A launch claims those actors before local orders in that turn. A scout
+  combat groups together, detach one scout, or keep the groups preparing and
+  defending locally. Uncommitted groups cannot independently advance or follow
+  a deployed group across the map, bypassing a campaign hold. A launch claims
+  those actors before local orders in that turn. A scout
   becomes a separate group so it cannot drag the preparing force along. Local
   combat decisions resume on subsequent observations. This avoids making every
   group wait independently for more reinforcements or more information.
+- **Threat interrupts:** when an armed enemy becomes visible within either side's
+  weapon reach plus a two-cell approach margin, the affected group gets a dedicated
+  question: keep the ordinary decision, switch fire to a new threat, or retreat.
+  Newly produced infantry and newly placed turrets are included. A selected interrupt
+  precedes campaign/local orders and bypasses the ordinary hold, while preserving
+  freshness, ownership, visibility, and pending-order checks. Unchanged contacts
+  do not repeatedly trigger the interrupt. Jev still decides whether a threat
+  warrants switching; the harness does not automatically choose its target.
 - **Maintenance:** Jev can enable paid building repair or sell a power consumer
   during a shortage. Observed repair state and revalidation prevent repeated
   orders from toggling an active repair off.

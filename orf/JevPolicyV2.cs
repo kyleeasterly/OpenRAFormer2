@@ -10,6 +10,8 @@ public sealed class JevGroup
 	public string Phase { get; set; } = "assemble";
 	public List<long> Members { get; set; } = [];
 	public long CreatedAt { get; set; }
+	public bool Committed { get; set; }
+	public List<long> ThreatIds { get; set; } = [];
 }
 
 public sealed class JevTactics
@@ -36,6 +38,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 	int requestCharacterBudget = 48000;
 	public int RequestCharacterBudget => requestCharacterBudget;
 	readonly List<string> campaignGroups = [];
+	readonly Dictionary<string, List<long>> observedThreats = [];
 	static readonly JsonSerializerOptions Options = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
 	public JevFrame Prepare(JsonObject state, JsonArray results, JsonArray pending)
@@ -200,7 +203,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 		{
 			if (assigned.Contains(id)) continue;
 			var role = Role(state, unit);
-			var nearby = Tactics.Groups.Values.Where(g => g.Role == role && g.Phase is "assemble" or "defend"
+			var nearby = Tactics.Groups.Values.Where(g => g.Role == role && !g.Committed && g.Phase is "assemble" or "defend"
 				&& g.Members.Count < config.SquadSize && g.Members.Any(i => Distance(Cell(units[i]["cell"]), Cell(unit["cell"])) <= 8))
 				.OrderBy(g => Distance(Anchor(g, units), Cell(unit["cell"]))).FirstOrDefault();
 			if (nearby == null && Tactics.Groups.Count < config.MaxSquads)
@@ -240,6 +243,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 	void BuildCombat(JevFrame frame)
 	{
 		targets.Clear();
+		observedThreats.Clear();
 		var state = frame.State;
 		var units = Objects(state, "units").ToDictionary(u => Number(u, "id"));
 		var combat = new JsonObject();
@@ -254,7 +258,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 			var friendly = Objects(state, "units").Where(u => Distance(anchor, Cell(u["cell"])) < 12 && Weapons(state, u).Any()).ToList();
 			combat[id] = new JsonObject
 			{
-				["role"] = group.Role, ["phase"] = group.Phase, ["members"] = Ids(group.Members),
+				["role"] = group.Role, ["phase"] = group.Phase, ["committed"] = group.Committed, ["members"] = Ids(group.Members),
 				["anchor"] = CellNode(anchor), ["spreadCells"] = spread,
 				["nearAnchor"] = members.Count(u => Distance(anchor, Cell(u["cell"])) <= 6),
 				["idleMembers"] = members.Count(u => Bool(u, "idle")),
@@ -264,6 +268,9 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 				["nearbyEnemyCombatValue"] = enemies.Where(e => Weapons(state, e).Any()).Sum(e => Value(state, e)),
 				["visibleEnemyIds"] = Ids(enemies.Select(e => Number(e, "id")))
 			};
+			if (core.Memory.Assignments.TryGetValue(id, out var assignment))
+				combat[id]!["lastSubmittedOrder"] = JsonNode.Parse(assignment.Action);
+			BuildThreatInterrupt(frame, id, group, members, enemies, home);
 			var choices = new JsonObject { ["continue"] = "Keep the current command if it is still useful. Idle troops are not advancing an operation." };
 			var actions = new Dictionary<string, JevAction>();
 			void Add(string key, string type, (int X, int Y) cell, string description)
@@ -272,12 +279,14 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 				actions[key] = new(new JsonObject { ["type"] = type, ["actorIds"] = Ids(group.Members), ["cell"] = CellNode(cell) }, id);
 			}
 			Add("assemble", "move", anchor, "Gather this group at its local anchor and wait for reinforcements; ordinary automatic targeting remains active.");
-			Add("advance", "attack_move", objective, "Commit this group together toward the common operation, fighting opposition en route.");
+			if (group.Committed || group.Role is "capture" or "support")
+				Add("advance", "attack_move", objective, "Continue this group's committed operation, fighting opposition en route.");
 			Add("withdraw", "move", home, "Withdraw to the base to preserve this group.");
 			var threat = Objects(state, "visibleEnemies").Where(e => Objects(state, "buildings").Any(b => Distance(Cell(b["cell"]), Cell(e["cell"])) < 12))
 				.OrderBy(e => Distance(anchor, Cell(e["cell"]))).FirstOrDefault();
 			if (threat != null) Add("defend", "attack_move", Cell(threat["cell"]), "Intercept a visible threat close to our base.");
-			var other = Tactics.Groups.Where(kv => kv.Key != id && kv.Value.Role == "front" && kv.Value.Members.Count > 1)
+			var other = Tactics.Groups.Where(kv => kv.Key != id && kv.Value.Role == "front" && kv.Value.Members.Count > 1
+				&& (group.Committed || !kv.Value.Committed))
 				.OrderBy(kv => Distance(anchor, Anchor(kv.Value, units))).FirstOrDefault();
 			if (other.Value != null) Add("reinforce", "attack_move", Anchor(other.Value, units), "Join friendly " + other.Key + " as a group instead of crossing the map alone.");
 			var targetChoices = new JsonObject { ["none"] = "No useful local target; retain movement or wait." };
@@ -310,10 +319,36 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 				"A spread-out group does not deliver its listed combat value at once. New recruits can join another group rather than trickle into enemy fire. " +
 				"An isolated light unit can scout, but do not repeatedly sacrifice lone reinforcements. " +
 				"A cohesive force with support should exploit an advantage and finish the enemy, without waiting for an arbitrary army size. " +
+				"Uncommitted groups gather and defend locally; only a campaign launch or scout decision authorizes their departure. " +
 				"After a campaign launch or scout order, continue the committed advance unless local danger or a real cohesion problem requires a change; " +
 				"do not cancel the offensive simply to wait for future reinforcements. Artillery needs cover and standoff; capture units are unarmed.", choices);
 		}
 		RequestState["localCombat"] = combat;
+	}
+
+	void BuildThreatInterrupt(JevFrame frame, string id, JevGroup group, List<JsonObject> members, List<JsonObject> enemies, (int X, int Y) home)
+	{
+		var state = frame.State;
+		var threats = enemies.Where(e => CanHit(state, members, e) && members.Any(u => CanHit(state, [e], u)
+			&& Distance(Cell(u["cell"]), Cell(e["cell"])) <= Math.Max(Range(state, u), Range(state, e)) + 2)).ToList();
+		observedThreats[id] = threats.Select(e => Number(e, "id")).ToList();
+		var fresh = threats.Where(e => !group.ThreatIds.Contains(Number(e, "id"))).Take(12).ToList();
+		if (fresh.Count == 0) return;
+		var choices = new JsonObject { ["keep"] = "Keep the ordinary maneuver and target decision; these new contacts do not justify interrupting it.",
+			["retreat"] = "Immediately break contact and withdraw to base; the new threat makes this engagement untenable." };
+		var actions = new Dictionary<string, JevAction> { ["retreat"] = new(new JsonObject { ["type"] = "move", ["actorIds"] = Ids(group.Members), ["cell"] = CellNode(home) }, id) };
+		foreach (var enemy in fresh)
+		{
+			var target = Number(enemy, "id");
+			choices["target" + target] = new JsonObject { ["directive"] = "Immediately switch fire to this newly relevant armed threat.", ["target"] = enemy.DeepClone() };
+			actions["target" + target] = new(new JsonObject { ["type"] = "attack", ["actorIds"] = Ids(members.Where(u => CanHit(state, [u], enemy)).Select(u => Number(u, "id"))), ["targetActorId"] = target }, id);
+		}
+		frame.Questions["alert_" + id] = Choice($"New immediate combat threat for {id}. Should its current engagement be interrupted? " +
+			"Inspect localCombat's lastSubmittedOrder and the new armed contacts. Newly produced infantry and newly placed turrets can kill this group " +
+			"while it keeps shooting a building. Prioritize an immediate dangerous, hittable threat over a non-firing structure or wall; " +
+			"compare weapon roles, range, health and nearby support. Keep the current target only when switching would be worse; retreat if necessary. " +
+			"An interrupt takes precedence over this group's ordinary maneuver/target and the campaign launch, and bypasses the ordinary command hold.", choices);
+		frame.Actions["alert_" + id] = actions;
 	}
 
 	void BuildCampaign(JevFrame frame)
@@ -321,7 +356,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 		campaignGroups.Clear();
 		if (Number(frame.State, "second") - Tactics.CampaignAt < config.ObjectiveSeconds) return;
 		campaignGroups.AddRange(Tactics.Groups.Where(g => g.Value.Role is "front" or "artillery" or "air"
-			&& g.Value.Phase is not ("advance" or "engage" or "scout")).Select(g => g.Key));
+			&& !g.Value.Committed).Select(g => g.Key));
 		if (campaignGroups.Count == 0) return;
 		var members = campaignGroups.SelectMany(g => Tactics.Groups[g].Members).ToList();
 		var home = Cell(frame.State["map"]?["yourSpawnCell"]);
@@ -332,7 +367,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 			"An early scout can find the enemy, but repeatedly launching lone reinforcements into resistance wastes units. " +
 			"Commit a useful combined force when its strength justifies pressure; hold when an actual threat or missing capability warrants delay. " +
 			"This is an executable army-wide decision. Launch takes precedence over these groups' local movement answers for this observation.",
-			new JsonObject { ["hold"] = "Keep the groups' local decisions; delay the coordinated offensive.",
+			new JsonObject { ["hold"] = "Keep these groups preparing and defending locally. Their departure is not authorized on this observation.",
 				["launch"] = new JsonObject { ["directive"] = "Send all listed preparing groups toward the common objective together, engaging opposition en route.",
 					["groups"] = new JsonArray([.. campaignGroups.Select(g => (JsonNode)JsonValue.Create(g)!)]), ["cell"] = CellNode(objective) } });
 		frame.Actions["campaign"] = new() { ["launch"] = new(new JsonObject { ["type"] = "attack_move", ["actorIds"] = Ids(members), ["cell"] = CellNode(objective) }, "campaign") };
@@ -388,26 +423,46 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 		foreach (var (group, options) in targets)
 			if (Text(answers[group], "choice") == "engage" && options.TryGetValue(Text(answers[group + "_target"], "choice"), out var target))
 				frame.Actions[group]["engage"] = target;
+		var held = new Dictionary<string, JevAssignment>();
+		foreach (var (question, actions) in frame.Actions.Where(kv => kv.Key.StartsWith("alert_")))
+			if (actions.TryGetValue(Text(answers[question], "choice"), out var interrupt)
+				&& core.Memory.Assignments.Remove(interrupt.Lane, out var previous))
+				held[interrupt.Lane] = previous;
 		var trace = core.Apply(frame, response, latest, channel);
+		foreach (var (lane, previous) in held)
+			if (!core.Memory.Assignments.ContainsKey(lane)) core.Memory.Assignments[lane] = previous;
+		foreach (var (id, seen) in observedThreats)
+			if (Tactics.Groups.TryGetValue(id, out var observed)) observed.ThreatIds = seen;
 		foreach (var d in Objects(trace, "decisions"))
 		{
 			if (Text(d, "outcome") == "submitted" && Tactics.Groups.TryGetValue(Text(d, "question"), out var group))
 				group.Phase = Text(d, "choice");
+			if (Text(d, "outcome") == "submitted" && Text(d, "question").StartsWith("alert_")
+				&& Tactics.Groups.TryGetValue(Text(d, "question")[6..], out var alerted))
+				alerted.Phase = Text(d, "choice") == "retreat" ? "withdraw" : "engage";
 			if (Text(d, "question") == "campaign" && Text(d, "outcome") == "submitted")
 			{
 				var choice = Text(d, "choice");
 				Tactics.Campaign = choice == "launch" ? "launch" : "scout";
 				if (choice == "launch")
-					foreach (var id in campaignGroups) Tactics.Groups[id].Phase = "advance";
+					foreach (var id in campaignGroups)
+					{
+						Tactics.Groups[id].Phase = "advance";
+						Tactics.Groups[id].Committed = true;
+					}
 				else
 				{
 					var scout = d["order"]!["actorIds"]![0]!.GetValue<long>();
 					var source = Tactics.Groups.Values.Single(g => g.Members.Contains(scout));
-					if (source.Members.Count == 1) source.Phase = "scout";
+					if (source.Members.Count == 1)
+					{
+						source.Phase = "scout";
+						source.Committed = true;
+					}
 					else
 					{
 						source.Members.Remove(scout);
-						Tactics.Groups["group" + Tactics.NextGroup++] = new JevGroup { Role = source.Role, Phase = "scout", Members = [scout], CreatedAt = Number(latest, "second") };
+						Tactics.Groups["group" + Tactics.NextGroup++] = new JevGroup { Role = source.Role, Phase = "scout", Members = [scout], Committed = true, CreatedAt = Number(latest, "second") };
 					}
 				}
 			}

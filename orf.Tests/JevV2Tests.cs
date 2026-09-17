@@ -139,6 +139,41 @@ public sealed class JevV2Tests
 	}
 
 	[Test]
+	public void PreparingGroupsCannotBypassCampaignHoldOrFollowDeployedReinforcements()
+	{
+		var (policy, tactics) = Policy();
+		var state = Observation();
+		var frame = policy.Prepare(state, [], []);
+		Assert.That(frame.Actions["group0"].ContainsKey("advance"), Is.False);
+		tactics.Groups["group0"].Committed = true;
+		tactics.Groups["group0"].Phase = "advance";
+		frame = policy.Prepare(state, [], []);
+		Assert.That(frame.Actions["group0"].ContainsKey("advance"), Is.True);
+	}
+
+	[TestCase("Minigunner", 4)]
+	[TestCase("Turret", 6)]
+	public void NewArmedThreatCanInterruptBuildingFireBeforeOrdinaryHoldExpires(string threat, int range)
+	{
+		var config = new JevSpec { PolicyVersion = 2, CommandHoldSeconds = 30 };
+		var oldOrder = """{"type":"attack","actorIds":[2],"targetActorId":91}""";
+		var memory = new JevMemory { Assignments = new() { ["group0"] = new JevAssignment(oldOrder, 3) } };
+		var tactics = new JevTactics();
+		var policy = new JevPolicyV2(config, new JevPolicy(config, memory), tactics);
+		var state = Observation();
+		state["visibleEnemies"]![0]!["name"] = threat;
+		state["ruleCatalog"]![threat] = new JsonObject { ["cost"] = 500L, ["weapons"] = new JsonArray(new JsonObject { ["rangeCells"] = range, ["targets"] = "Ground" }) };
+		state["visibleEnemies"]!.AsArray().Add(new JsonObject { ["id"] = 91L, ["name"] = "Barracks", ["cell"] = new JsonArray(16,10), ["isBuilding"] = true });
+		var frame = policy.Prepare(state, [], []);
+		var trace = policy.Apply(frame, Response(frame, new() { ["alert_group0"] = "target90", ["campaign"] = "launch", ["group0"] = "engage", ["group0_target"] = "target91" }), state,
+			new PlayerOrderChannel(Path.GetTempPath(), "jev-v2-test"));
+		Assert.That(trace["orders"]!.AsArray().Count, Is.EqualTo(1));
+		Assert.That(trace["orders"]![0]!["targetActorId"]!.GetValue<long>(), Is.EqualTo(90));
+		Assert.That(tactics.Groups["group0"].Phase, Is.EqualTo("engage"));
+		Assert.That(policy.Prepare(state, [], []).Questions.ContainsKey("alert_group0"), Is.False, "unchanged threats do not repeatedly interrupt");
+	}
+
+	[Test]
 	public void OversizedPlacementChoicesAreSampledWithMatchingExecutableActions()
 	{
 		var (policy, _) = Policy();
@@ -185,11 +220,13 @@ public sealed class JevV2Tests
 		var (policy, tactics) = Policy();
 		var state = Observation();
 		var frame = policy.Prepare(state, [], []);
-		var response = Response(frame, new() { ["operation"] = "objective0", ["group0"] = "advance" });
+		var response = Response(frame, new() { ["operation"] = "objective0", ["campaign"] = "launch", ["alert_group0"] = "target90" });
 		state = (JsonObject)state.DeepClone(); state["tick"] = 1000;
 		var trace = policy.Apply(frame, response, state, new PlayerOrderChannel(Path.GetTempPath(), "jev-v2-test"));
 		Assert.That(((JsonArray)trace["orders"]!).Count, Is.Zero);
 		Assert.That(tactics.OperationCell, Is.Null);
 		Assert.That(tactics.Groups["group0"].Phase, Is.EqualTo("assemble"));
+		Assert.That(tactics.Groups["group0"].Committed, Is.False);
+		Assert.That(tactics.Groups["group0"].ThreatIds, Is.Empty);
 	}
 }
