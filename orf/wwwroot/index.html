@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>orf — live match</title>
+<link rel="stylesheet" href="jev-viewer.css">
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
@@ -670,8 +671,20 @@ function makeCard(p, parent) {
   const modLanes = new Map();
 
   card.classList.add("clickable");
-  card.title = "click for full agent history";
-  card.addEventListener("click", () => openHistory(p));
+  card.title = p.controller === "jev" ? "open live Jev input and output" : "click for full agent history";
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
+  card.setAttribute("aria-label", `${p.display || p.slug}: ${card.title}`);
+  const openPlayer = () => {
+    if (p.controller === "jev" && window.JevViewer) {
+      closeHistory();
+      window.JevViewer.open(latestPlayers.find(current => current.slug === p.slug) || p);
+    } else openHistory(p);
+  };
+  card.addEventListener("click", openPlayer);
+  card.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPlayer(); }
+  });
 
   const grid = el("div", "statgrid", card);
   const stats = {};
@@ -742,6 +755,7 @@ function render(data) {
   const players = data.players || [];
 
   latestPlayers = players;
+  window.JevViewer?.update(data);
   if (data.nowUtc)
     serverClockOffsetMs = Date.parse(data.nowUtc) - Date.now();
 
@@ -871,8 +885,10 @@ if (/\/r\/[^/]+\/$/.test(location.pathname))
 
 const es = new EventSource("api/live");
 es.onmessage = e => {
+  window.JevViewer?.connection(true);
   try { render(JSON.parse(e.data)); } catch (err) { console.error(err); }
 };
+es.onerror = () => window.JevViewer?.connection(false);
 
 // Cadence ticker: latency pills tick every 250ms between SSE frames, using the
 // server clock (payload nowUtc) so agent timestamps never fight the browser clock.
@@ -987,5 +1003,6 @@ audioBtn.addEventListener("click", () => {
 if (localStorage.getItem("orfAudio") === "1")
   startAudio(false);
 </script>
+<script src="jev-viewer.js"></script>
 </body>
 </html>

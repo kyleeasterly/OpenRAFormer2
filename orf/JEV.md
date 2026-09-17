@@ -15,8 +15,13 @@ dotnet orf/bin/Release/net10.0/orf.dll run --spec orf/specs/jev-duel.yaml
 ```
 
 The dashboard normally binds port 5199 (the runner probes upward if occupied).
-Click a player to inspect question wording, candidate descriptions, probabilities,
-execution decisions, full observations, and previous engine acknowledgements.
+Click a Jev player for a full-screen input/output view that follows new turns
+automatically. It shows native API latency and call cadence, with tabs for the
+complete state, questions, raw request/response, and submitted orders. Use Pause
+to hold the current turn, or Turn history to inspect an earlier one. Back to live
+resumes following; the Map button returns to the match without resetting map zoom.
+Question details include all candidates, probabilities, and execution decisions;
+the Orders tab distinguishes current submissions from earlier engine feedback.
 The ordinary video/audio stream, observer renderer, hub, replay archive, and stop
 command remain available. Use SSH forwarding or authenticated access for remote viewing.
 
