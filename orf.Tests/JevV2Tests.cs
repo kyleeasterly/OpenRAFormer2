@@ -96,15 +96,41 @@ public sealed class JevV2Tests
 		var state = Observation();
 		state["pendingPlacement"]![0]!["item"] = "Tiberium Refinery";
 		state["spatialEconomy"] = JsonNode.Parse("""
-		{"refineries":{"Tiberium Refinery":{"freeUnit":"Harvester"}},"placementSites":[
+		{"refineries":{"Tiberium Refinery":{"freeUnit":"Harvester"}},"patches":[{"id":"large","visibleCells":30,"density":150},{"id":"small","visibleCells":2,"density":3}],"placementSites":[
 		 {"item":"Tiberium Refinery","cell":[5,5],"dockCell":[5,7],"openDockNeighbors":3,"patches":[{"id":"large","travelCells":2,"visibleCells":30,"density":150}]},
 		 {"item":"Tiberium Refinery","cell":[7,5],"dockCell":[7,7],"openDockNeighbors":1,"patches":[{"id":"small","travelCells":1,"visibleCells":2,"density":3}]}]}
 		""");
 		var frame = policy.Prepare(state, [], []);
 		var criteria = frame.Questions["placement0"]!["criteria"]!;
 		Assert.That(criteria["c5_5"]!["patches"]![0]!["travelCells"]!.GetValue<int>(), Is.EqualTo(2));
-		Assert.That(criteria["c7_5"]!["patches"]![0]!["visibleCells"]!.GetValue<int>(), Is.EqualTo(2));
-		Assert.That(policy.RequestState["game"]!["spatialEconomy"]!["placementSites"], Is.Null);
+		Assert.That(criteria["c7_5"]!["patches"]![0]!["id"]!.GetValue<string>(), Is.EqualTo("small"));
+		Assert.That(policy.RequestState["economy"]!["visibleResourcePatches"]![1]!["visibleCells"]!.GetValue<int>(), Is.EqualTo(2));
+		Assert.That(policy.RequestState["game"]!["spatialEconomy"], Is.Null);
+	}
+
+	[Test]
+	public void OversizedPlacementChoicesAreSampledWithMatchingExecutableActions()
+	{
+		var (policy, _) = Policy();
+		var state = Observation();
+		state["pendingPlacement"]![0]!["item"] = "Tiberium Refinery";
+		state["pendingPlacement"]![0]!["gridOrigin"] = new JsonArray(0,0);
+		state["pendingPlacement"]![0]!["grid"] = new JsonArray([.. Enumerable.Range(0, 16).Select(_ => (JsonNode)JsonValue.Create(new string('+', 16))!)]);
+		var sites = new JsonArray();
+		for (var i = 0; i < 128; i++)
+			sites.Add(new JsonObject { ["item"] = "Tiberium Refinery", ["cell"] = new JsonArray(i % 16,i / 16),
+				["dockCell"] = new JsonArray(i % 16,i / 16 + 2), ["routeDescription"] = new string('x', 600),
+				["patches"] = new JsonArray() });
+		state["spatialEconomy"] = new JsonObject { ["refineries"] = new JsonObject { ["Tiberium Refinery"] = new JsonObject() }, ["placementSites"] = sites };
+		var frame = policy.Prepare(state, [], []);
+		Assert.That(policy.RequestState.ToJsonString().Length + frame.Questions.ToJsonString().Length, Is.LessThanOrEqualTo(48000));
+		var choices = ((JsonObject)frame.Questions["placement0"]!["criteria"]!).Select(c => c.Key).ToList();
+		Assert.That(choices.Count, Is.LessThan(129));
+		Assert.That(choices, Does.Contain("wait"));
+		Assert.That(frame.Actions["placement0"].Keys, Is.EquivalentTo(choices.Where(k => k != "wait")));
+		Assert.That(policy.ReduceRequestBudget(), Is.True);
+		frame = policy.Prepare(state, [], []);
+		Assert.That(policy.RequestState.ToJsonString().Length + frame.Questions.ToJsonString().Length, Is.LessThanOrEqualTo(36000));
 	}
 
 	[Test]

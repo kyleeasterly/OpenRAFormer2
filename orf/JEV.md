@@ -133,6 +133,13 @@ model and order validation are shared with v1; `JevPolicyV2` wraps the unchanged
 - **Maintenance:** Jev can enable paid building repair or sell a power consumer
   during a shortage. Observed repair state and revalidation prevent repeated
   orders from toggling an active repair off.
+- **Input budget:** rule metadata and patch quantities appear once in shared
+  state. Local target lists contain at most 24 entries. V2 samples placement/target
+  choices further if the state and questions exceed 48,000 JSON characters,
+  preserving executable mappings and the wait/none choice. This is an empirical
+  budget, not an exact token count. A native `max_tokens_exceeded` response lowers
+  the budget for the next fresh observation, down to 24,000 characters. Other
+  non-retryable API failures retain the normal stop behavior.
 
 The comparison specs use a two-second command hold for v2 and the original
 five-second hold for v1. Run them sequentially to swap starting positions:

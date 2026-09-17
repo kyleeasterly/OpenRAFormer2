@@ -33,7 +33,15 @@ public sealed class JevClient
 		{
 			var retryAfter = response.Headers.RetryAfter?.Delta
 				?? (response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow);
-			throw new JevApiException((int)response.StatusCode, retryAfter);
+			string? errorType = null;
+			try
+			{
+				var body = JsonNode.Parse(await response.Content.ReadAsStringAsync(deadline.Token)) as JsonObject;
+				if (body?["detail"] is JsonObject detail && detail["error_type"]?.ToString() == "max_tokens_exceeded")
+					errorType = "max_tokens_exceeded";
+			}
+			catch (System.Text.Json.JsonException) { }
+			throw new JevApiException((int)response.StatusCode, retryAfter, errorType);
 		}
 
 		return JsonNode.Parse(await response.Content.ReadAsStringAsync(deadline.Token)) as JsonObject
@@ -88,9 +96,11 @@ public sealed class JevClient
 	}
 }
 
-public sealed class JevApiException(int status, TimeSpan? retryAfter) : Exception($"TypeSafe HTTP {status}")
+public sealed class JevApiException(int status, TimeSpan? retryAfter, string? errorType = null)
+	: Exception($"TypeSafe HTTP {status}" + (errorType == null ? "" : ": " + errorType))
 {
 	public int Status { get; } = status;
+	public string? ErrorType { get; } = errorType;
 	public TimeSpan? RetryAfter { get; } = retryAfter;
 	public bool Retryable => Status is 408 or 429 or >= 500;
 }

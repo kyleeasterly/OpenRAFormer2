@@ -31,6 +31,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 	public JsonObject RequestState { get; private set; } = [];
 	readonly Dictionary<string, (string Name, (int X, int Y) Cell)> operations = [];
 	readonly Dictionary<string, Dictionary<string, JevAction>> targets = [];
+	int requestCharacterBudget = 48000;
 	static readonly JsonSerializerOptions Options = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
 	public JevFrame Prepare(JsonObject state, JsonArray results, JsonArray pending)
@@ -53,7 +54,8 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 			" Group membership follows physical proximity and combat role. New units do not automatically reinforce a deployed wave. " +
 			"Dollar values adjusted for health describe nearby forces; they are not a simulation or win probability. " +
 			"Operation choices become context next observation. A group's target question is conditional on its maneuver selecting engage; " +
-			"answer both against this observation without assuming the other's answer.";
+			"answer both against this observation without assuming the other's answer. " +
+			"Item and target capabilities are in game.ruleCatalog, keyed by name. Refinery patch IDs refer to economy.visibleResourcePatches.";
 		ImproveEconomyQuestions(frame);
 		RefineryQuestions(frame);
 		BuildOperation(frame);
@@ -61,8 +63,43 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 		BuildMaintenance(frame);
 		// Site descriptions are already attached to the placement question. Keep
 		// the rest of the economy observation without duplicating 128 alternatives.
-		(RequestState["game"]?["spatialEconomy"] as JsonObject)?.Remove("placementSites");
+		(RequestState["game"] as JsonObject)?.Remove("spatialEconomy");
+		(RequestState["memory"] as JsonObject)?.Remove("squads");
+		foreach (var question in frame.Questions.Select(q => q.Value).OfType<JsonObject>())
+			if (question["criteria"] is JsonObject criteria)
+				foreach (var option in criteria.Select(c => c.Value).OfType<JsonObject>())
+					option.Remove("properties");
+		FitRequest(frame);
 		return frame;
+	}
+
+	// Native tokenization is provider-owned. Keep ample empirical headroom and
+	// adapt on its explicit size error using the next fresh observation.
+	public bool ReduceRequestBudget()
+	{
+		if (requestCharacterBudget <= 24000) return false;
+		requestCharacterBudget = Math.Max(24000, requestCharacterBudget * 3 / 4);
+		return true;
+	}
+
+	void FitRequest(JevFrame frame)
+	{
+		while (RequestState.ToJsonString().Length + frame.Questions.ToJsonString().Length > requestCharacterBudget)
+		{
+			var largest = frame.Questions.Where(q => q.Key.StartsWith("placement") || q.Key.EndsWith("_target"))
+				.Select(q => (q.Key, Criteria: q.Value?["criteria"] as JsonObject))
+				.Where(q => q.Criteria?.Count > 9).OrderByDescending(q => q.Criteria!.ToJsonString().Length).FirstOrDefault();
+			if (largest.Criteria == null)
+				throw new InvalidOperationException("V2 observation exceeds its request budget after candidate reduction");
+			var keys = largest.Criteria.Select(c => c.Key).Skip(1).ToList();
+			var count = Math.Max(8, keys.Count / 2);
+			var retain = Enumerable.Range(0, count).Select(i => keys[i * keys.Count / count]).ToHashSet();
+			foreach (var key in keys.Where(k => !retain.Contains(k)))
+			{
+				largest.Criteria.Remove(key);
+				if (frame.Actions.TryGetValue(largest.Key, out var actions)) actions.Remove(key);
+			}
+		}
 	}
 
 	static JsonObject Economy(JsonObject state)
@@ -95,7 +132,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 				"Choose one additional building, unlock an unavailable unit, or none. Account for investments already in progress.";
 		foreach (var (id, question) in frame.Questions)
 		{
-			if (!id.StartsWith("production") || question is not JsonObject q) continue;
+			if (!id.StartsWith("production") || id.EndsWith("_urgency") || question is not JsonObject q) continue;
 			q["instructions"] = Text(q, "instructions") +
 				" Use economy and localCombat to identify the actual bottleneck. For military production, build a force that can fight together " +
 				"and counter observed opposition. Engineers cannot fight; recruit one only for a credible capture task, not as general combat infantry. " +
@@ -122,13 +159,19 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 				var cell = Cell(site["cell"]);
 				var key = $"c{cell.X}_{cell.Y}";
 				var description = (JsonObject)site.DeepClone();
+				description.Remove("item");
+				foreach (var patch in Objects(description, "patches"))
+				{
+					patch.Remove("visibleCells");
+					patch.Remove("density");
+				}
 				description["distanceToExistingRefinery"] = Closest(cell, Objects(frame.State, "buildings").Where(b => IsRefinery(frame.State, Name(b))));
 				description["distanceToVisibleEnemy"] = Closest(cell, Objects(frame.State, "visibleEnemies"));
 				choices[key] = description;
 				actions[key] = new(new JsonObject { ["type"] = "place_building", ["item"] = item, ["cell"] = CellNode(cell) }, "placement:" + item);
 			}
 			frame.Questions[id] = Choice("Where should this completed refinery go to maximize useful harvesting income? " +
-				"Compare the actual docking cell's walking routes to the visible Tiberium patches, their remaining density and size, " +
+				"Compare the actual docking cell's walking routes to the visible Tiberium patches, looking up their density and size by ID in economy.visibleResourcePatches, " +
 				"and dock access. Short repeated round trips to a substantial patch matter more than distance from the base center. " +
 				"A tiny fragment can be closer yet yield less than a rich patch. Prefer useful coverage beyond existing refineries while considering " +
 				"visible enemy threats and congestion. An empty patches list means no known walking route from that dock. " +
@@ -212,7 +255,7 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 				["ownCombatValue"] = members.Where(u => Weapons(state, u).Any()).Sum(u => Value(state, u)),
 				["nearbyFriendlyCombatValue"] = friendly.Sum(u => Value(state, u)),
 				["nearbyEnemyCombatValue"] = enemies.Where(e => Weapons(state, e).Any()).Sum(e => Value(state, e)),
-				["visibleEnemies"] = new JsonArray([.. enemies.Select(e => e.DeepClone())])
+				["visibleEnemyIds"] = Ids(enemies.Select(e => Number(e, "id")))
 			};
 			var choices = new JsonObject { ["continue"] = "Keep the current command if it is still useful. Idle troops are not advancing an operation." };
 			var actions = new Dictionary<string, JevAction>();
@@ -232,7 +275,8 @@ public sealed class JevPolicyV2(JevSpec config, JevPolicy core, JevTactics? tact
 			if (other.Value != null) Add("reinforce", "attack_move", Anchor(other.Value, units), "Join friendly " + other.Key + " as a group instead of crossing the map alone.");
 			var targetChoices = new JsonObject { ["none"] = "No useful local target; retain movement or wait." };
 			var targetActions = new Dictionary<string, JevAction>();
-			foreach (var enemy in enemies.Where(e => group.Role == "capture" ? Bool(Catalog(state, Name(e)), "capturable") : CanHit(state, members, e)))
+			foreach (var enemy in enemies.Where(e => group.Role == "capture" ? Bool(Catalog(state, Name(e)), "capturable") : CanHit(state, members, e))
+				.OrderBy(e => Distance(anchor, Cell(e["cell"]))).Take(24))
 			{
 				var target = Number(enemy, "id");
 				var key = "target" + target;

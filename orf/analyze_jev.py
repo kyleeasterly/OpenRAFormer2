@@ -81,7 +81,8 @@ def analyze(run):
                 if order['type'] in ('attack', 'attack_move'):
                     attack_sizes.append(len(order.get('actorIds', [])))
                 if order['type'] == 'attack_move' and order.get('cell') and enemy_locations:
-                    members = [units[i] for i in order.get('actorIds', []) if i in units]
+                    members = [units[i] for i in order.get('actorIds', [])
+                               if i in units and catalog.get(units[i]['name'], {}).get('weapons')]
                     if members:
                         center = [statistics.mean(u['cell'][axis] for u in members) for axis in (0, 1)]
                         if distance(center, order['cell']) >= 25 and min(distance(order['cell'], e) for e in enemy_locations) <= 20:
@@ -89,7 +90,8 @@ def analyze(run):
                             solo_advances += len(members) == 1 and sum(distance(center, u['cell']) <= 10 for u in armed) <= 1
                 if order['type'] == 'place_building' and order['item'] == 'Tiberium Refinery':
                     chosen = next((q['criteria'].get('c' + '_'.join(map(str, order['cell'])))
-                                   for key, q in request.get('questions', {}).items() if key.startswith('placement')), None)
+                                   for key, q in request.get('questions', {}).items()
+                                   if key.startswith('placement') and 'refinery' in q.get('instructions', '').lower()), None)
                     refinery_sites.append({'second': second, 'cell': order['cell'], 'candidate': chosen})
         for path in (run / 'orders' / agent.name / 'results').glob('*.json'):
             for entry in read(path, {}).get('results', []):

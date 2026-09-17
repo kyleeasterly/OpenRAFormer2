@@ -83,7 +83,8 @@ public sealed class JevLoop
 					WriteStatus();
 					File.AppendAllText(Path.Combine(AgentDir, "errors.log"), $"{DateTime.UtcNow:o} {error}\n");
 					Util.Log(player.Slug, error);
-					if (ex is JevApiException { Retryable: false })
+					var reduced = ex is JevApiException { ErrorType: "max_tokens_exceeded" } && policyV2?.ReduceRequestBudget() == true;
+					if (ex is JevApiException { Retryable: false } && !reduced)
 						break;
 					wait = ex is JevApiException { RetryAfter: { } retry } ? retry
 						: TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, Math.Min(failures, 5))) + Random.Shared.NextDouble());

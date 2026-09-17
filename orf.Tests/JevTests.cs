@@ -288,6 +288,23 @@ public sealed class JevTests
 	}
 
 	[Test]
+	public async Task NativeSizeErrorIsIdentifiedWithoutEchoingArbitraryErrorContent()
+	{
+		using var http = new HttpClient(new Handler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+		{
+			Content = new StringContent("""{"detail":{"error_type":"max_tokens_exceeded","echo":"private-request-content"}}""")
+		})));
+		var client = new JevClient("https://example.invalid/v1", "test-only", 500, http);
+		try { await client.EvaluateAsync(new(), CancellationToken.None); Assert.Fail("Expected size error"); }
+		catch (JevApiException e)
+		{
+			Assert.That(e.ErrorType, Is.EqualTo("max_tokens_exceeded"));
+			Assert.That(e.Retryable, Is.False);
+			Assert.That(e.Message, Does.Not.Contain("private-request-content"));
+		}
+	}
+
+	[Test]
 	public async Task MatchEndingDuringRequestDiscardsTheResponse()
 	{
 		var state = State();
