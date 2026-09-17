@@ -39,6 +39,9 @@ def analyze(run):
         advance_sizes, solo_advances, attack_sizes, spans, latency = [], 0, [], [], []
         peak_harvesters = peak_army = low_power = 0
         timeline, seen_seconds, refinery_sites = [], set(), []
+        campaigns, interrupts = collections.Counter(), collections.Counter()
+        native_calls = max_batches = submitted_interrupts = 0
+        first_distant_advance = None
         for turn in sorted((agent / 'turns').iterdir()):
             state, request = read(turn / 'state.json'), read(turn / 'request.json')
             if not state or not request:
@@ -46,7 +49,11 @@ def analyze(run):
             trace, response = read(turn / 'decisions.json', {}), read(turn / 'response.json', {})
             if response.get('model'):
                 models.add(response['model'])
+                models.update(m for m in response.get('batchModels', []) if m)
             if response:
+                batches = response.get('batchCount', 1)
+                native_calls += batches
+                max_batches = max(max_batches, batches)
                 latency.append(max(0, (turn / 'response.json').stat().st_mtime - (turn / 'request.json').stat().st_mtime) * 1000)
             second, catalog = state['second'], state.get('ruleCatalog', {})
             units = {u['id']: u for u in state.get('units', [])}
@@ -74,6 +81,13 @@ def analyze(run):
                                      'refineries': sum(b['name'] == 'Tiberium Refinery' for b in buildings),
                                      'largestGroupSpan': round(max(current_spans, default=0), 1)})
             enemy_locations = [e['cell'] for e in state.get('enemySpawns', []) + state.get('lastKnownEnemyBuildings', [])]
+            for decision in trace.get('decisions', []):
+                question, choice = decision.get('question', ''), decision.get('choice', '')
+                if question == 'campaign':
+                    campaigns['scout' if choice.startswith('scout') else choice] += 1
+                if question.startswith('alert_'):
+                    interrupts['retarget' if choice.startswith('target') else choice] += 1
+                    submitted_interrupts += decision.get('outcome') == 'submitted'
             for order in trace.get('orders', []):
                 orders[order['type']] += 1
                 if order['type'] == 'start_production':
@@ -86,6 +100,8 @@ def analyze(run):
                     if members:
                         center = [statistics.mean(u['cell'][axis] for u in members) for axis in (0, 1)]
                         if distance(center, order['cell']) >= 25 and min(distance(order['cell'], e) for e in enemy_locations) <= 20:
+                            if first_distant_advance is None:
+                                first_distant_advance = second
                             advance_sizes.append(len(members))
                             solo_advances += len(members) == 1 and sum(distance(center, u['cell']) <= 10 for u in armed) <= 1
                 if order['type'] == 'place_building' and order['item'] == 'Tiberium Refinery':
@@ -103,6 +119,9 @@ def analyze(run):
             'policyVersion': status.get('policyVersion', next((p.get('jevPolicyVersion', 1) for p in match.get('players', []) if p['slug'] == agent.name), 1)),
             'models': sorted(models), 'turns': status.get('turn'), 'errors': errors, 'engineRejections': dict(rejections),
             'costEstimateUsd': status.get('totalCostUsd'), 'medianApiMilliseconds': round(statistics.median(latency), 1) if latency else None,
+            'successfulNativeCalls': native_calls, 'maxNativeBatchesPerTurn': max_batches,
+            'campaignChoices': dict(campaigns), 'threatInterruptChoices': dict(interrupts), 'submittedThreatInterrupts': submitted_interrupts,
+            'firstDistantCombatAdvanceSecond': first_distant_advance,
             'observations': len(seen_seconds), 'lowPowerObservations': low_power, 'firstSeenSecond': first_seen,
             'purchasesSubmitted': dict(purchases), 'ordersSubmitted': dict(orders), 'attackCommandSizes': dict(collections.Counter(attack_sizes)),
             'distantAdvanceCount': len(advance_sizes), 'isolatedSingleUnitAdvances': solo_advances,

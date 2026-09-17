@@ -125,7 +125,7 @@ model and order validation are shared with v1; `JevPolicyV2` wraps the unchanged
 - **Combat:** a persistent common operation gives each group a destination. Each
   group separately chooses a maneuver (assemble, reinforce, advance, engage,
   defend, withdraw, continue) and, when available, a local target. A target answer
-  is executed only if the same batch selects engage. Both questions use the same
+  is executed only if that observation's maneuver selects engage. Both questions use the same
   observation; neither assumes the other's answer. Local health, weapon ranges,
   group spread, and nearby health-adjusted unit costs provide context. Unit cost
   is a rough force indicator, not a matchup simulation. There is no mandatory
