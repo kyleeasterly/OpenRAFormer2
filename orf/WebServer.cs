@@ -386,6 +386,16 @@ public static class WebServer
 			["finished"] = Util.TryReadJson(Path.Combine(runDir, "result.json")),
 		};
 
+		if (spec.Evolution is { } evo)
+			payload["evolution"] = new JsonObject
+			{
+				["version"] = evo.Version,
+				["parent"] = evo.Parent,
+				["tweak"] = evo.Tweak,
+				["challenge"] = evo.Challenge,
+				["lineage"] = new JsonArray([.. evo.Lineage.Select(l => (JsonNode)l)]),
+			};
+
 		return payload.ToJsonString();
 	}
 }

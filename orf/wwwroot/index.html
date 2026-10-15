@@ -15,7 +15,28 @@
   }
   .mono { font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; }
 
-  .wrap { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  .wrap { display: grid; grid-template-rows: auto auto auto auto minmax(0, 1fr); height: 100vh; }
+
+  /* Harness-evolution banner: which version of the agent this is and what changed. */
+  #evoBanner {
+    display: none; align-items: baseline; gap: 12px; padding: 6px 16px;
+    background: linear-gradient(90deg, #1d1530, #141a2a); border-bottom: 1px solid #3a2d5c;
+    white-space: nowrap; overflow: hidden; cursor: pointer;
+  }
+  #evoBanner.on { display: flex; }
+  #evoVersion {
+    font-weight: 800; color: #fff; background: #6a3fd6; border-radius: 4px;
+    padding: 1px 8px; font-size: 14px; letter-spacing: .5px;
+  }
+  #evoParent { color: #9a8cc7; font-size: 12px; }
+  #evoTweak { color: #e6ddff; font-size: 14px; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  #evoChallenge { color: #ffce54; font-weight: 700; font-size: 13px; margin-left: auto; }
+  #evoLineage {
+    display: none; padding: 6px 16px 8px 28px; background: #151225; border-bottom: 1px solid #3a2d5c;
+    color: #c9bfef; font-size: 12px; max-height: 40vh; overflow: auto;
+  }
+  #evoLineage.open { display: block; }
+  #evoLineage div { padding: 1px 0; }
 
   header {
     display: flex; align-items: baseline; gap: 18px;
@@ -217,6 +238,13 @@
     <button id="audioBtn" title="game sound (combat ambience)">🔇</button>
     <span id="runId" class="hdim mono"></span>
   </header>
+  <div id="evoBanner" title="click for the full lineage">
+    <span id="evoVersion"></span>
+    <span id="evoParent"></span>
+    <span id="evoTweak"></span>
+    <span id="evoChallenge"></span>
+  </div>
+  <div id="evoLineage"></div>
   <div id="graphStrip">
     <canvas id="pointsChart"></canvas>
     <span id="graphTitle">game points (army + assets value)</span>
@@ -750,6 +778,29 @@ function fmtClock(sec) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+let evoKey = null;
+function renderEvolution(evo) {
+  const banner = document.getElementById("evoBanner");
+  banner.classList.toggle("on", !!evo);
+  if (!evo) return;
+  const key = JSON.stringify(evo);
+  if (key === evoKey) return;
+  evoKey = key;
+  document.getElementById("evoVersion").textContent = evo.version || "?";
+  document.getElementById("evoParent").textContent = evo.parent ? `evolved from ${evo.parent}` : "baseline";
+  document.getElementById("evoTweak").textContent = evo.tweak || "";
+  document.getElementById("evoTweak").title = evo.tweak || "";
+  document.getElementById("evoChallenge").textContent = evo.challenge || "";
+  const lineage = document.getElementById("evoLineage");
+  lineage.replaceChildren(...(evo.lineage || []).map(line => {
+    const d = document.createElement("div");
+    d.textContent = line;
+    return d;
+  }));
+}
+document.getElementById("evoBanner").addEventListener("click", () =>
+  document.getElementById("evoLineage").classList.toggle("open"));
+
 function render(data) {
   const game = data.game;
   const players = data.players || [];
@@ -768,6 +819,7 @@ function render(data) {
   }
 
   document.getElementById("runId").textContent = data.runId || "";
+  renderEvolution(data.evolution);
 
   let totalCost = 0, totalTokens = 0, totalRequests = 0;
   for (const p of players) {
