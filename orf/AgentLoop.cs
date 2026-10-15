@@ -69,6 +69,36 @@ public sealed class AgentLoop
 
 	/// <summary>Records the outcome of one provider turn and rotates the model after
 	/// enough consecutive failures. Returns true when the lane switched.</summary>
+	/// <summary>
+	/// Copies tool calls for replay in history, replacing arguments that are not a
+	/// JSON object with "{}". Providers validate the whole transcript: one empty
+	/// arguments string (MissingNo, 2026-10-11) made every later request a 400,
+	/// and since failed turns never advance the history it could not age out.
+	/// </summary>
+	static JsonArray SanitizedToolCalls(JsonArray toolCalls)
+	{
+		var copy = (JsonArray)toolCalls.DeepClone();
+		foreach (var call in copy.OfType<JsonObject>())
+		{
+			if (call["function"] is not JsonObject fn)
+				continue;
+
+			var valid = false;
+			try
+			{
+				valid = JsonNode.Parse(fn["arguments"]?.GetValue<string>() ?? "") is JsonObject;
+			}
+			catch (Exception)
+			{
+			}
+
+			if (!valid)
+				fn["arguments"] = "{}";
+		}
+
+		return copy;
+	}
+
 	bool NoteTurnOutcome(bool ok)
 	{
 		if (ok)
@@ -226,9 +256,15 @@ public sealed class AgentLoop
 				// turnIntervalSeconds <= 0 means "as fast as the provider allows": poll for
 				// fresh engine state (written 1/s) and take the next turn immediately.
 				// StepAsync's tick gate prevents duplicate turns on stale state.
-				await Task.Delay(EffectiveInterval > 0
+				var interval = EffectiveInterval > 0
 					? TimeSpan.FromSeconds(EffectiveInterval)
-					: TimeSpan.FromMilliseconds(250), ct);
+					: TimeSpan.FromMilliseconds(250);
+
+				// Token-budget pacing from the provider's rate-limit headers (see
+				// LlmClient.UpdatePace): a lane that drains the key's hourly budget
+				// in 40 minutes loses the last 20 to a hard stall.
+				var pace = TimeSpan.FromSeconds(llm?.PaceDelaySeconds ?? 0);
+				await Task.Delay(pace > interval ? pace : interval, ct);
 			}
 		}
 		catch (OperationCanceledException)
@@ -491,10 +527,20 @@ public sealed class AgentLoop
 
 			lastError = null;
 		}
-		catch
+		catch (Exception ex)
 		{
 			requestStartedAtUtc = null;
 			NoteTurnOutcome(false);
+
+			// A 400 means the request itself was rejected. History is the only part
+			// that carries over between turns, so drop it rather than resend the
+			// same poisoned transcript forever.
+			if (ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.BadRequest } && history.Count > 0)
+			{
+				history.Clear();
+				AppendErrorLog("400 from provider: cleared rolling history so the next turn starts clean");
+			}
+
 			WriteStatus();
 			throw;
 		}
@@ -663,10 +709,15 @@ public sealed class AgentLoop
 				}
 			}
 		}
-		foreach (var tc in message["tool_calls"] as JsonArray ?? [])
+		// Parallel tool calls arrive in no meaningful order: MissingNo emitted
+		// issue_orders on group "ball" before the set_group that created it, so the
+		// orders were rejected. Run set_group first; otherwise keep the model's order.
+		var calls = (message["tool_calls"] as JsonArray ?? [])
+			.OfType<JsonObject>()
+			.OrderBy(c => c["function"]?["name"]?.GetValue<string>() == "set_group" ? 0 : 1)
+			.ToList();
+		foreach (var call in calls)
 		{
-			if (tc is not JsonObject call)
-				continue;
 
 			var toolName = call["function"]?["name"]?.GetValue<string>();
 			var toolResult = $"{{\"ok\": false, \"reason\": \"unknown tool '{toolName}'\"}}";
@@ -875,15 +926,17 @@ public sealed class AgentLoop
 			});
 		}
 
-		// A turn that came back with no tool call at all is a provider glitch, not a
+		// A turn that came back with nothing at all is a provider glitch, not a
 		// decision — that shape (HTTP 200, null content) once ate 108 turns of a match.
-		if (NoteTurnOutcome(toolMessages.Count > 0 || textFallbackUsed))
+		// Plain text with no tool call is a (poor) decision by a live model: counting
+		// it as a failure failed MissingNo over after three "nothing to do" turns.
+		if (NoteTurnOutcome(toolMessages.Count > 0 || textFallbackUsed || !string.IsNullOrWhiteSpace(content)))
 			return orders;
 
 		// Rolling history: keep the last 6 exchange pairs, each a protocol-correct group.
 		var assistantMsg = new JsonObject { ["role"] = "assistant", ["content"] = content };
 		if (message["tool_calls"] is JsonArray tcs && tcs.Count > 0)
-			assistantMsg["tool_calls"] = tcs.DeepClone();
+			assistantMsg["tool_calls"] = SanitizedToolCalls(tcs);
 
 		var group = new List<JsonObject> { userMsg, assistantMsg };
 		group.AddRange(toolMessages);
@@ -892,7 +945,9 @@ public sealed class AgentLoop
 		// Each exchange embeds a full state snapshot — history length is the single
 		// biggest prompt-size lever. Role lanes default to 2 (v3's 6 ballooned every
 		// lane to ~15k tokens and 25-40s turns).
-		var maxHistory = role == null ? 6 : role.HistoryTurns > 0 ? role.HistoryTurns : 2;
+		var maxHistory = role != null
+			? role.HistoryTurns > 0 ? role.HistoryTurns : 2
+			: player.HistoryTurns > 0 ? player.HistoryTurns : 6;
 		while (history.Count > maxHistory)
 			history.RemoveAt(0);
 
@@ -1545,6 +1600,8 @@ public sealed class AgentLoop
 			["avgTurnSeconds"] = turnLatencies.Count > 0 ? Math.Round(turnLatencies.Average(), 1) : null,
 			["latencyWindow"] = turnLatencies.Count,
 			["rateLimited429s"] = llm?.RateLimited429s ?? 0,
+			["paceDelaySeconds"] = Math.Round(llm?.PaceDelaySeconds ?? 0, 1),
+			["paceNote"] = llm?.PaceNote,
 			["model"] = ActiveModel,
 			["modelFallbackIndex"] = modelIndex,
 			["provider"] = player.Provider,

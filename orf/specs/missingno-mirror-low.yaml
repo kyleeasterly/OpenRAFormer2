@@ -1,0 +1,49 @@
+# Low-vs-low mirror: the low/medium pair split 1-1 with spawn 1 (and the faster lane)
+# winning both, so this measures spawn bias with identical controllers.
+# MissingNo debut: stealth/missingno (free on Nous Portal, 262K ctx, reasoning always on)
+# driving the v7 commander in a GDI mirror. The one variable is reasoning depth:
+# low vs medium. Probed 2026-10-11 at ~2-3s per tool-call turn on small prompts, so
+# both lanes should keep a real cadence — this tests whether depth pays once speed
+# is no longer the bottleneck (the Ox Alpha nights said cadence beats depth).
+#
+# No fallback model: the only free candidate on Nous (stepfun/step-5-preview:free)
+# answered every request with 400 "missing tags", killing the lane it rescued.
+# Lanes share one Nous key (720k tokens/min, 30.24M/hour), paced from its
+# rate-limit headers — see LlmClient.UpdatePace.
+name: missingno-mirror-low
+map: scorched-earth.oramap
+web: { port: 5199 }
+display: ":97"
+resolution: [2048, 2048]  # 2540 ran both parallel matches at ~70% speed (llvmpipe)
+stream: { fps: 6, scale: 2048, quality: 6 }
+stateFormat: markdown
+turnIntervalSeconds: 0
+maxTurnsPerPlayer: 0
+# Spawn 1 = top-left, spawn 8 = bottom-right: maximum diagonal separation.
+players:
+  - slug: mn-low-a
+    display: MissingNo-Low-A
+    provider: nous
+    model: stealth/missingno
+    faction: gdi
+    spawn: 1
+    temperature: 1.0
+    reasoningEffort: low
+    maxTokens: 8000
+    timeoutSeconds: 120
+    promptFile: ../prompts/system-v7.md
+    historyTurns: 3  # ~17k-token prompts instead of ~25k: the Nous key budget, not latency, caps cadence
+  - slug: mn-low-b
+    display: MissingNo-Low-B
+    provider: nous
+    model: stealth/missingno
+    faction: gdi
+    spawn: 8
+    temperature: 1.0
+    reasoningEffort: low
+    maxTokens: 8000
+    timeoutSeconds: 120
+    promptFile: ../prompts/system-v7.md
+    historyTurns: 3  # ~17k-token prompts instead of ~25k: the Nous key budget, not latency, caps cadence
+providers:
+  nous: { baseUrl: "https://inference-api.nousresearch.com/v1", apiKeyEnv: NOUS_API_KEY }

@@ -89,7 +89,7 @@ Orders already in flight are **not** a reason to skip a turn. "Waiting for confi
 
 The OPPORTUNITIES block is your per-turn checklist. Work it top to bottom:
 
-- **Idle production queue** → start something. `Building` and `Support` (defenses, silos, walls) are separate queues and run in parallel — you can build a structure and a Guard Tower at the same time.
+- **Idle production queue** → start something. `Building` and `Support` (defenses, silos, walls) are separate queues and run in parallel — you can build a structure and a Guard Tower at the same time. The exception: an idle `Support` queue is normal and fine. Never buy walls/sandbags just to keep it busy — they add nothing but clutter that blocks your own placements. Use `Support` only for a defense you actually need (see "Do not over-build static defense").
 - **Cash above ~$2000 with anything buildable** → an emergency. Money in the bank kills nothing. Spend it: more production rules, another refinery, another Barracks/Weapons Factory once your queues are saturated.
 - **Building awaiting placement** → `place_building` now. Refineries adjacent to tiberium, defenses toward the enemy, power plants at the back, factories with clear exits.
 - **Idle combat units** → fold them into a group and give the group a destination.

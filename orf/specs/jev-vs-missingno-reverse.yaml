@@ -1,0 +1,43 @@
+# Spawn-swapped rematch of jev-vs-missingno (MissingNo won from spawn 8 at 18:54 on 2026-10-11).
+# Two kinds of mind, one map: TypeSafe's native Jev (System One choice model, ~270ms
+# per decision, 1 Hz observations, harness v2) vs MissingNo (free reasoning LLM on
+# Nous, v7 commander at low effort, ~8-10s per turn on full prompts). GDI mirror on
+# Scorched Earth. Jev gets the fast reflexes; MissingNo gets language, plans, and the
+# v7 plan executor that places structures at ~1 Hz between its turns.
+#
+# This is a complete-controller comparison, not a model benchmark — see JEV.md.
+name: jev-vs-missingno-reverse
+map: scorched-earth.oramap
+web: { port: 5199 }
+display: ":97"
+resolution: [2048, 2048]  # 2540 ran both parallel matches at ~70% speed (llvmpipe)
+stream: { fps: 6, scale: 2048, quality: 6 }
+stateIntervalTicks: 25
+stateFormat: markdown
+turnIntervalSeconds: 0
+maxTurnsPerPlayer: 0
+# Spawn 1 = top-left, spawn 8 = bottom-right: maximum diagonal separation.
+players:
+  - slug: jev
+    display: Jev v2
+    controller: jev
+    provider: typesafe
+    model: jev-latest
+    faction: gdi
+    spawn: 8
+    jev: { policyVersion: 2, commandHoldSeconds: 2 }
+  - slug: missingno
+    display: MissingNo
+    provider: nous
+    model: stealth/missingno
+    faction: gdi
+    spawn: 1
+    temperature: 1.0
+    reasoningEffort: low
+    maxTokens: 8000
+    timeoutSeconds: 120
+    promptFile: ../prompts/system-v7.md
+    historyTurns: 3  # ~17k-token prompts instead of ~25k: the Nous key budget, not latency, caps cadence
+providers:
+  typesafe: { baseUrl: "https://api.typesafe.ai/v1", apiKeyEnv: TYPESAFE_API_KEY }
+  nous:     { baseUrl: "https://inference-api.nousresearch.com/v1", apiKeyEnv: NOUS_API_KEY }

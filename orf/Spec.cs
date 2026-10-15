@@ -26,6 +26,9 @@ public sealed class Spec
 
 	public bool HasHumans => Players.Any(p => p.IsHuman);
 
+	/// <summary>Optional harness-evolution label shown as a banner on the match viewer.</summary>
+	public EvolutionSpec? Evolution { get; set; }
+
 	public int DisplayNumber => int.TryParse(Display.TrimStart(':'), out var n) ? n : 97;
 	public int Width => Resolution.Count > 0 ? Resolution[0] : 2540;
 	public int Height => Resolution.Count > 1 ? Resolution[1] : 2540;
@@ -174,6 +177,13 @@ public sealed class PlayerSpec
 	/// <summary>Completion budget per turn. Reasoning models spend this on thinking too — give them room.</summary>
 	public int MaxTokens { get; set; } = 2000;
 
+	/// <summary>
+	/// Exchanges of rolling history replayed each turn (0 = default 6). Each one
+	/// carries a full state snapshot, so this is the main prompt-size lever when a
+	/// key's token budget, not latency, limits cadence.
+	/// </summary>
+	public int HistoryTurns { get; set; }
+
 	/// <summary>Per-request timeout. High reasoning efforts can legitimately exceed the old 120s default.</summary>
 	public int TimeoutSeconds { get; set; } = 120;
 
@@ -216,6 +226,19 @@ public sealed class JevSpec
 }
 
 /// <summary>Swarm composition: bootstrap commander, core roles, and dynamic spawn rules.</summary>
+/// <summary>
+/// What this match's harness version is and how it differs from its parent — the
+/// hill-climbing record, displayed on the viewer so every match explains itself.
+/// </summary>
+public sealed class EvolutionSpec
+{
+	public string Version { get; set; } = "";
+	public string? Parent { get; set; }
+	public string Tweak { get; set; } = "";
+	public string? Challenge { get; set; }
+	public List<string> Lineage { get; set; } = [];
+}
+
 public sealed class SwarmSpec
 {
 	/// <summary>Solo commander that opens the game alone (full order authority) and hands
